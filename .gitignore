@@ -12,6 +12,7 @@ cmake-build-*/
 *.map
 *.lst
 *.d
+*.exe
 
 # Unused CMSIS bundles not referenced by this project's CMake target
 Drivers/CMSIS/Core/

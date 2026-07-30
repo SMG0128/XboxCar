@@ -112,10 +112,12 @@ void HAL_UART_MspInit(UART_HandleTypeDef *uart_handle)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
 
-  if (uart_handle->Instance == USART3)
+  if (uart_handle->Instance == USART1)
   {
     __HAL_RCC_GPIOB_CLK_ENABLE();
-    __HAL_RCC_USART3_CLK_ENABLE();
+    __HAL_RCC_AFIO_CLK_ENABLE();
+    __HAL_RCC_USART1_CLK_ENABLE();
+    __HAL_AFIO_REMAP_USART1_ENABLE();
 
     GPIO_InitStruct.Pin = STM32_TX_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
@@ -127,18 +129,18 @@ void HAL_UART_MspInit(UART_HandleTypeDef *uart_handle)
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-    HAL_NVIC_SetPriority(USART3_IRQn, 0, 0);
-    HAL_NVIC_EnableIRQ(USART3_IRQn);
+    HAL_NVIC_SetPriority(USART1_IRQn, 0, 0);
+    HAL_NVIC_EnableIRQ(USART1_IRQn);
   }
 }
 
 void HAL_UART_MspDeInit(UART_HandleTypeDef *uart_handle)
 {
-  if (uart_handle->Instance == USART3)
+  if (uart_handle->Instance == USART1)
   {
-    __HAL_RCC_USART3_CLK_DISABLE();
+    __HAL_RCC_USART1_CLK_DISABLE();
     HAL_GPIO_DeInit(GPIOB, STM32_TX_Pin|STM32_RX_Pin);
-    HAL_NVIC_DisableIRQ(USART3_IRQn);
+    HAL_NVIC_DisableIRQ(USART1_IRQn);
   }
 }
 

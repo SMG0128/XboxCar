@@ -21,8 +21,9 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "ssd1306_simple.h"
-#include "xbox_protocol.h"
+#include "app.h"
+#include "board_config.h"
+#include "motor.h"
 
 /* USER CODE END Includes */
 
@@ -44,63 +45,23 @@
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c1;
 
-UART_HandleTypeDef huart3;
+UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
-static bool oled_ready;
-static bool display_has_state;
-static bool displayed_connected;
-static int16_t displayed_left;
-static int16_t displayed_right;
-static uint32_t last_display_ms;
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_I2C1_Init(void);
-static void MX_USART3_UART_Init(void);
+static void MX_USART1_UART_Init(void);
 static void MX_GPIO_Init(void);
 /* USER CODE BEGIN PFP */
-static void UpdateDisplay(uint32_t now_ms);
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-static void UpdateDisplay(uint32_t now_ms)
-{
-  XboxControlState state;
-  bool connected;
-
-  if ((uint32_t)(now_ms - last_display_ms) < 100U)
-  {
-    return;
-  }
-  last_display_ms = now_ms;
-
-  connected = XboxProtocol_GetState(now_ms, &state);
-  if (!connected)
-  {
-    state.left = 0;
-    state.right = 0;
-  }
-
-  if (!oled_ready ||
-      (display_has_state && displayed_connected == connected &&
-       displayed_left == state.left && displayed_right == state.right))
-  {
-    return;
-  }
-
-  if (SSD1306_ShowControl(connected, state.left, state.right))
-  {
-    display_has_state = true;
-    displayed_connected = connected;
-    displayed_left = state.left;
-    displayed_right = state.right;
-  }
-}
 
 /* USER CODE END 0 */
 
@@ -134,25 +95,9 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_I2C1_Init();
-  MX_USART3_UART_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-
-  HAL_Delay(50U);
-  oled_ready = SSD1306_Init(&hi2c1);
-  if (oled_ready && SSD1306_ShowControl(false, 0, 0))
-  {
-    display_has_state = true;
-    displayed_connected = false;
-    displayed_left = 0;
-    displayed_right = 0;
-  }
-
-  XboxProtocol_Init(&huart3);
-  if (XboxProtocol_StartReceive() != HAL_OK)
-  {
-    Error_Handler();
-  }
-  last_display_ms = HAL_GetTick();
+  App_Init(&huart1, &hi2c1);
 
   /* USER CODE END 2 */
 
@@ -163,8 +108,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    (void)XboxProtocol_Process();
-    UpdateDisplay(HAL_GetTick());
+    App_Loop();
   }
   /* USER CODE END 3 */
 }
@@ -228,21 +172,21 @@ static void MX_I2C1_Init(void)
 }
 
 /**
-  * @brief USART3 Initialization Function
+ * @brief USART1 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_USART3_UART_Init(void)
+static void MX_USART1_UART_Init(void)
 {
-  huart3.Instance = USART3;
-  huart3.Init.BaudRate = 115200;
-  huart3.Init.WordLength = UART_WORDLENGTH_8B;
-  huart3.Init.StopBits = UART_STOPBITS_1;
-  huart3.Init.Parity = UART_PARITY_NONE;
-  huart3.Init.Mode = UART_MODE_TX_RX;
-  huart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart3.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart3) != HAL_OK)
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 115200;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
   {
     Error_Handler();
   }
@@ -256,24 +200,31 @@ static void MX_USART3_UART_Init(void)
 static void MX_GPIO_Init(void)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
+  const uint16_t motor_a_pins = MOTOR_LF_PWM_PIN | MOTOR_LR_PWM_PIN |
+                                MOTOR_LF_IN1_PIN | MOTOR_LF_IN2_PIN |
+                                MOTOR_LR_IN1_PIN | MOTOR_LR_IN2_PIN |
+                                MOTOR_RF_IN1_PIN | MOTOR_RF_IN2_PIN |
+                                MOTOR_RR_IN1_PIN | MOTOR_RR_IN2_PIN;
+  const uint16_t motor_b_pins = MOTOR_RF_PWM_PIN | MOTOR_RR_PWM_PIN;
   /* USER CODE BEGIN MX_GPIO_Init_1 */
 
   /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_AFIO_CLK_ENABLE();
+  __HAL_AFIO_REMAP_SWJ_NOJTAG();
 
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(OLED_GND_GPIO_Port, OLED_GND_Pin, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(OLED_VCC_GPIO_Port, OLED_VCC_Pin, GPIO_PIN_SET);
-
-  /*Configure GPIO pins : PB6 PB7 */
-  GPIO_InitStruct.Pin = OLED_GND_Pin|OLED_VCC_Pin;
+  /* Establish a safe low level before changing any motor pin to output mode. */
+  GPIOA->BSRR = (uint32_t)motor_a_pins << 16U;
+  GPIOB->BSRR = (uint32_t)motor_b_pins << 16U;
+  GPIO_InitStruct.Pin = motor_a_pins;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  GPIO_InitStruct.Pin = motor_b_pins;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
@@ -292,7 +243,7 @@ static void MX_GPIO_Init(void)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
+  Motor_EmergencyStop();
   __disable_irq();
   while (1)
   {

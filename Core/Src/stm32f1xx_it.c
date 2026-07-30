@@ -22,6 +22,8 @@
 #include "stm32f1xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "board_config.h"
+#include "soft_pwm.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -51,11 +53,21 @@
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static void EmergencyMotorPinsLow(void)
+{
+  TIM4->CR1 = 0U;
+  GPIOA->BSRR = ((uint32_t)(MOTOR_LF_PWM_PIN | MOTOR_LR_PWM_PIN |
+                            MOTOR_LF_IN1_PIN | MOTOR_LF_IN2_PIN |
+                            MOTOR_LR_IN1_PIN | MOTOR_LR_IN2_PIN |
+                            MOTOR_RF_IN1_PIN | MOTOR_RF_IN2_PIN |
+                            MOTOR_RR_IN1_PIN | MOTOR_RR_IN2_PIN)) << 16U;
+  GPIOB->BSRR = ((uint32_t)(MOTOR_RF_PWM_PIN | MOTOR_RR_PWM_PIN)) << 16U;
+}
 
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
-extern UART_HandleTypeDef huart3;
+extern UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN EV */
 
@@ -70,7 +82,7 @@ extern UART_HandleTypeDef huart3;
 void NMI_Handler(void)
 {
   /* USER CODE BEGIN NonMaskableInt_IRQn 0 */
-
+  EmergencyMotorPinsLow();
   /* USER CODE END NonMaskableInt_IRQn 0 */
   /* USER CODE BEGIN NonMaskableInt_IRQn 1 */
    while (1)
@@ -85,7 +97,7 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
-
+  EmergencyMotorPinsLow();
   /* USER CODE END HardFault_IRQn 0 */
   while (1)
   {
@@ -100,7 +112,7 @@ void HardFault_Handler(void)
 void MemManage_Handler(void)
 {
   /* USER CODE BEGIN MemoryManagement_IRQn 0 */
-
+  EmergencyMotorPinsLow();
   /* USER CODE END MemoryManagement_IRQn 0 */
   while (1)
   {
@@ -115,7 +127,7 @@ void MemManage_Handler(void)
 void BusFault_Handler(void)
 {
   /* USER CODE BEGIN BusFault_IRQn 0 */
-
+  EmergencyMotorPinsLow();
   /* USER CODE END BusFault_IRQn 0 */
   while (1)
   {
@@ -130,7 +142,7 @@ void BusFault_Handler(void)
 void UsageFault_Handler(void)
 {
   /* USER CODE BEGIN UsageFault_IRQn 0 */
-
+  EmergencyMotorPinsLow();
   /* USER CODE END UsageFault_IRQn 0 */
   while (1)
   {
@@ -199,11 +211,16 @@ void SysTick_Handler(void)
 /* please refer to the startup file (startup_stm32f1xx.s).                    */
 /******************************************************************************/
 /**
-  * @brief This function handles USART3 global interrupt.
+ * @brief This function handles USART1 global interrupt.
   */
-void USART3_IRQHandler(void)
+void USART1_IRQHandler(void)
 {
-  HAL_UART_IRQHandler(&huart3);
+  HAL_UART_IRQHandler(&huart1);
+}
+
+void TIM4_IRQHandler(void)
+{
+  SoftPwm_TimerIrqHandler();
 }
 
 /* USER CODE BEGIN 1 */

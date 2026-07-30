@@ -1063,10 +1063,28 @@
           <name>$PROJ_DIR$/../Core/Src/main.c</name>
         </file>
         <file>
-          <name>$PROJ_DIR$/../Core/Src/xbox_protocol.c</name>
+          <name>$PROJ_DIR$/../Core/Src/ssd1306_simple.c</name>
         </file>
         <file>
-          <name>$PROJ_DIR$/../Core/Src/ssd1306_simple.c</name>
+          <name>$PROJ_DIR$/../Core/Src/app.c</name>
+        </file>
+        <file>
+          <name>$PROJ_DIR$/../Core/Src/control_mixer.c</name>
+        </file>
+        <file>
+          <name>$PROJ_DIR$/../Core/Src/control_protocol.c</name>
+        </file>
+        <file>
+          <name>$PROJ_DIR$/../Core/Src/control_system.c</name>
+        </file>
+        <file>
+          <name>$PROJ_DIR$/../Core/Src/motor.c</name>
+        </file>
+        <file>
+          <name>$PROJ_DIR$/../Core/Src/soft_pwm.c</name>
+        </file>
+        <file>
+          <name>$PROJ_DIR$/../Core/Src/ultrasonic.c</name>
         </file>
         <file>
           <name>$PROJ_DIR$/../Core/Src/stm32f1xx_it.c</name>

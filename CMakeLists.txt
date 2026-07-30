@@ -29,8 +29,14 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 )
 
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-    Core/Src/xbox_protocol.c
     Core/Src/ssd1306_simple.c
+    Core/Src/app.c
+    Core/Src/control_mixer.c
+    Core/Src/control_protocol.c
+    Core/Src/control_system.c
+    Core/Src/motor.c
+    Core/Src/soft_pwm.c
+    Core/Src/ultrasonic.c
 )
 
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
