@@ -1,84 +1,68 @@
-# XboxCar ESP32-S3 控制端
+# XboxCar STM32 串口解析与 OLED 显示
 
-本分支保存 XboxCar 项目的 ESP32-S3 控制端代码与 ESP32/STM32 串口协议。
+本工程基于 `D:\XboxCar\stm32workspace` 创建，原工程未被修改。目标芯片为 `STM32F103C8T6`。
 
-ESP32-S3 通过 Bluepad32 连接 Xbox Wireless Controller，读取左摇杆 Y 轴和右摇杆 X 轴，计算左右轮差速，经平滑加减速后，以 50 Hz 向 STM32 或电脑串口发送 ASCII 控制帧。
+STM32 通过 USART3 接收 ESP32-S3 发出的 XboxCar 控制帧，校验帧格式和 XOR 后，在 128×64 SSD1306 OLED 上显示运动方向与速度。
 
-## 已实现功能
+## 接线
 
-- Xbox 无线手柄连接、断线检测与自动安全停车
-- 左摇杆 Y 轴控制前进/后退
-- 右摇杆 X 轴控制转向和原地旋转
-- 左右轮差速混合，输出范围 `-1000..+1000`
-- 摇杆死区、连续重映射、加减速斜坡和换向过零保护
-- Xbox 系统键紧急停车
-- UART0 以 115200 baud、8N1、50 Hz 输出固定长度控制帧
-- 帧序号与 XOR 校验
-- 板载 LED 关闭示例
-- 可在电脑上运行的控制算法单元测试
+### ESP32-S3 与 STM32
 
-## 目录结构
+| ESP32-S3 | STM32F103 | 用途 |
+| --- | --- | --- |
+| GPIO43 / UART0 TX | PB11 / USART3 RX | ESP32 向 STM32 发送控制帧 |
+| GND | GND | 共地 |
+| 可不接 | PB10 / USART3 TX | STM32 发送端，当前程序未使用 |
 
-```text
-.
-├── ESP_LED_Off/
-│   └── ESP_LED_Off.ino
-├── Xbox_Controller_Debug/
-│   ├── Xbox_Controller_Debug.ino
-│   ├── XboxCarControl.h
-│   ├── XboxCarControl.cpp
-│   └── tests/
-│       └── test_xbox_car_control.cpp
-├── config/
-│   └── ESP32_STM32_XBOX_PROTOCOL.md
-└── README.md
-```
+USART3 配置为 `115200 baud, 8N1`。
 
-`Xbox_Controller_Debug` 是当前实际使用的控制程序。`.ino` 负责 Bluepad32 连接、定时调度和串口发送；`XboxCarControl.*` 负责摇杆归一化、差速、斜坡、动作分类、组帧和校验。
+### OLED
 
-## 硬件与依赖
+按当前硬件接线：
 
-- ESP32-S3 开发板
-- Xbox Wireless Controller
-- Arduino IDE / Arduino CLI
-- Bluepad32 Arduino Core
-- 当前验证的 FQBN：`esp32-bluepad32:esp32:esp32s3`
-- 当前验证的 Bluepad32 ESP32 Core 版本：`4.1.0`
+| STM32F103 | OLED | 配置 |
+| --- | --- | --- |
+| PB6 | GND | GPIO 推挽输出低电平 |
+| PB7 | VCC | GPIO 推挽输出高电平 |
+| PB8 | SCL | 重映射 I2C1 SCL |
+| PB9 | SDA | 重映射 I2C1 SDA |
 
-UART0 参数：
+I2C1 频率为 400 kHz，SSD1306 地址默认为 `0x3C`。
 
-| 项目 | 配置 |
-| --- | --- |
-| 波特率 | 115200 |
-| 数据格式 | 8N1 |
-| ESP32 TX | GPIO43 |
-| ESP32 RX | GPIO44 |
-| 发送周期 | 20 ms（50 Hz） |
+> PB6/PB7 通过 GPIO 给 OLED 提供地和电源是按照当前接线实现的。请确认 OLED 模块工作电流没有超过 STM32 GPIO 的允许电流；正式硬件更推荐直接连接稳定的 GND 和 3.3 V。
 
-连接 STM32 时至少连接：
+原始工程没有复制 I2C/UART HAL 的源文件和头文件。新工程已从本机与 `.ioc` 一致的官方 `STM32Cube_FW_F1_V1.8.7` 固件包补入这些驱动，原工程保持不变。
+
+## OLED 显示
+
+OLED 使用 2 倍 5×7 字体显示两行：
 
 ```text
-ESP32 GPIO43 (TX) -> STM32 UART RX
-ESP32 GND         -> STM32 GND
+UP:0800
+RIGHT:0350
 ```
 
-开发板的 USB 转串口也可读取相同控制帧。UART0 可能同时出现 Bluepad32 启动日志，接收端应只解析以 `$XC,` 开头且格式、长度和 CRC 均合法的帧。
+- 第一行显示纵向方向：`UP`、`DOWN` 或 `STOP`
+- 第一行速度：`abs((LEFT + RIGHT) / 2)`
+- 第二行显示转向方向：`LEFT`、`RIGHT` 或 `LR`
+- 第二行速度：`abs((LEFT - RIGHT) / 2)`
+- 速度范围：`0000..1000`
 
-## 手柄操作
+以下情况显示：
 
-| 输入 | 功能 |
-| --- | --- |
-| 左摇杆 Y | 前进/后退 |
-| 右摇杆 X | 左转/右转；油门为零时原地旋转 |
-| Xbox 系统键 | 紧急停车 |
+```text
+No Xbox
+```
 
-左摇杆 Y 死区为 8%，右摇杆 X 死区为 10%。死区外会从零开始连续映射，因此越过死区边界时不会发生速度突跳。
+- 上电后尚未收到合法控制帧
+- 收到 `CMD=1001` Xbox 断线帧
+- 连续 200 ms 没有收到合法控制帧
 
-正常驾驶最大输出为 `1000`，原地旋转最大输出为 `650`。控制循环周期为 10 ms；加速每周期最多增加 25，减速每周期最多减少 40。正反方向切换时必须先减速到零。
+`CMD=0111` 紧急停车、`1000` 尚无手柄数据和 `1111` 错误帧会强制把左右速度清零。
 
 ## 串口协议
 
-固定帧格式：
+程序只接受固定 30 字节帧：
 
 ```text
 $XC,<CMD>,<LEFT>,<RIGHT>,<SEQ>,<CRC>\r\n
@@ -90,55 +74,75 @@ $XC,<CMD>,<LEFT>,<RIGHT>,<SEQ>,<CRC>\r\n
 $XC,0001,+0800,+0800,0025,1D\r\n
 ```
 
-- `CMD`：4 位二进制动作码
-- `LEFT`、`RIGHT`：带符号四位十进制数，范围 `-1000..+1000`
-- `SEQ`：`0000..9999` 循环序号
-- `CRC`：从 `X` 到 `SEQ` 末位所有 ASCII 字节的 8 位 XOR
-- 合法帧固定为 30 字节，并以单个 `CRLF` 结束
+接收器逐字节中断接收，并以 `$` 重新同步。只有以下检查全部通过才更新 OLED 状态：
 
-完整字段、动作码、安全规则和 STM32 解析建议见 [config/ESP32_STM32_XBOX_PROTOCOL.md](config/ESP32_STM32_XBOX_PROTOCOL.md)。
+1. 帧头为 `$XC`
+2. 总长度和逗号位置正确
+3. 行尾为单个 `CRLF`
+4. `CMD` 是四位二进制数
+5. `LEFT`、`RIGHT` 是带符号四位十进制数，范围 `-1000..+1000`
+6. `SEQ` 是四位十进制数
+7. 两位大写十六进制 XOR 与实际计算结果一致
 
-## 编译与烧录
+Bluepad32 启动日志和其他非协议文本会被自动忽略。
 
-1. 在 Arduino IDE 中安装 Bluepad32 ESP32 Core。
-2. 打开 `Xbox_Controller_Debug/Xbox_Controller_Debug.ino`。
-3. 选择 ESP32-S3 对应开发板和串口。
-4. 编译并烧录。
-5. 如果自动复位后没有运行，松开所有按键，仅短按一次 `RST/EN`，不要按 `BOOT`。
+## 主要文件
 
-Arduino CLI 示例：
+| 文件 | 作用 |
+| --- | --- |
+| `stm32workspace.ioc` | CubeMX 外设与引脚配置 |
+| `Core/Src/main.c` | 外设初始化、协议处理和显示调度 |
+| `Core/Src/xbox_protocol.c` | 串口接收、组帧、CRC、字段校验和超时状态 |
+| `Core/Inc/xbox_protocol.h` | Xbox 协议接口 |
+| `Core/Src/ssd1306_simple.c` | SSD1306 初始化、字体和两行显示 |
+| `Core/Inc/ssd1306_simple.h` | OLED 接口 |
+| `Core/Src/stm32f1xx_hal_msp.c` | PB8/PB9 I2C1 和 PB10/PB11 USART3 底层配置 |
+| `Core/Src/stm32f1xx_it.c` | USART3 中断入口 |
 
-```powershell
-arduino-cli compile --fqbn esp32-bluepad32:esp32:esp32s3 Xbox_Controller_Debug
-arduino-cli upload -p COM4 --fqbn esp32-bluepad32:esp32:esp32s3 Xbox_Controller_Debug
+## 使用说明
+
+1. 用 STM32CubeMX 打开 `stm32workspace.ioc` 检查配置。
+2. 使用 CLion/CMake、STM32CubeIDE 或其他兼容工具打开工程。
+3. 编译并烧录后，连接 OLED 和 ESP32-S3。
+4. ESP32 上运行 XboxCar 的 `Xbox_Controller_Debug` 固件。
+5. Xbox 未连接时显示 `No Xbox`；连接并操作摇杆后显示方向和速度。
+
+本次任务按要求只创建和修改工程文件，没有编译或烧录 STM32。
+
+## CLion OpenOCD 下载并运行
+
+工程包含共享运行配置：
+
+```text
+.run/STM32_OpenOCD_Download_Run.run.xml
 ```
 
-默认 `XBOXCAR_LOG_LEVEL=0`，串口只保留协议帧。台架调试时可改为：
+本机已确认安装：
 
-- `1`：增加连接、断线和安全事件
-- `2`：再增加限频的摇杆和差速诊断
+| 工具 | 路径 |
+| --- | --- |
+| CLion | `C:\Program Files\JetBrains\CLion 2026.1.3` |
+| OpenOCD | `D:\openocd-20260302\OpenOCD-20260302-0.12.0\bin\openocd.exe` |
+| Arm GCC | `C:\ST\STM32CubeCLT_1.22.0\GNU-tools-for-STM32\bin\arm-none-eabi-gcc.exe` |
+| CMake | `C:\ST\STM32CubeCLT_1.22.0\CMake\bin\cmake.exe` |
+| Ninja | `C:\ST\STM32CubeCLT_1.22.0\Ninja\bin\ninja.exe` |
 
-正式与 STM32 联调时建议保持为 `0`。
+CLion 操作：
 
-## 安全行为
+1. 用 CLion 打开本工程根目录。
+2. 等待 `Debug` CMake Preset 加载完成。
+3. 在运行配置中选择 `STM32 OpenOCD Download & Run`。
+4. 点击运行或按 `Shift+F10`：先编译，再下载、校验、复位并运行。
+5. 点击调试或按 `Shift+F9`：下载后连接 GDB，可使用断点和寄存器视图。
 
-以下情况立即清零左右输出，不等待斜坡：
+运行配置参数：
 
-- Xbox 手柄断线
-- 按下 Xbox 系统键
-- 摇杆数据越界
-- 控制帧组装失败
+- CMake 目标：`stm32workspace`
+- OpenOCD 配置：`stlink.cfg`
+- GDB 端口：3333
+- Telnet 端口：4444
+- 下载策略：每次下载
+- 复位策略：`reset run`
+- 调试器：CLion 内置 ARM GDB
 
-STM32 端还应设置 200 ms 合法帧超时；超时后立即关闭电机输出。
-
-## 验证结果
-
-2026-07-30 在 ESP32-S3 与 Xbox Wireless Controller 实机验证：
-
-- 固件编译和烧录成功
-- 手柄连接、停车和前进指令正常
-- 3.21 秒收到 160 个合法控制帧
-- 实测发送频率 49.8 Hz
-- CRC 错误 0
-- 串口行尾为单个 `CRLF`
-- C++ 控制算法单元测试全部通过
+`stlink.cfg` 已针对当前 ST-Link/SWD 和 STM32F103 目标配置。当前探针没有连接 NRST，因此如果正常下载无法接管正在运行的芯片，可在 CLion 的 CMake 目标中运行 `recover-flash`，并反复短按开发板 RESET，直到 OpenOCD 开始写入；成功后再短按一次 RESET 运行。

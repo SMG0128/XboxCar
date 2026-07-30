@@ -1,0 +1,32 @@
+# CLion and generated build directories
+.idea/
+build/
+cmake-build-*/
+
+# Compiler and linker outputs
+*.o
+*.obj
+*.elf
+*.hex
+*.bin
+*.map
+*.lst
+*.d
+
+# Unused CMSIS bundles not referenced by this project's CMake target
+Drivers/CMSIS/Core/
+Drivers/CMSIS/Core_A/
+Drivers/CMSIS/docs/
+Drivers/CMSIS/DSP/
+Drivers/CMSIS/Lib/
+Drivers/CMSIS/NN/
+Drivers/CMSIS/RTOS/
+Drivers/CMSIS/RTOS2/
+
+# Runtime and editor noise
+*.log
+*.tmp
+*.bak
+*~
+Thumbs.db
+Desktop.ini
