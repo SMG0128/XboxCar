@@ -11,7 +11,7 @@
 | 右前 | 右侧 A | PB3 | PA12 | PA15 |
 | 右后 | 右侧 B | PB15 | PA8 | PA9 |
 
-每个电机的安装方向修正在 `Core/Inc/app_config.h` 的
+每个电机的安装方向修正在 `App/Inc/app_config.h` 的
 `MOTOR_*_INVERTED` 中集中配置。默认右侧两电机反向。
 
 ## 通信与传感器
@@ -36,4 +36,3 @@ PB6/PB7 当作 OLED GND/VCC，并用 PB10/PB11 运行 USART3；这与 PCB 电机
 - 程序没有虚构 STBY GPIO，也不能检测 VM 是否已经接好。
 - PB3、PA15 默认属于 JTAG；固件关闭 JTAG-DP、保留 SWD。
 - PA1 与 PB3 不能同时成为两个独立 TIM2_CH2。四路 PWM 因此使用 TIM4 基准中断的软件 PWM。
-

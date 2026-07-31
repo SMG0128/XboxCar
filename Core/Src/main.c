@@ -21,9 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "app.h"
-#include "board_config.h"
-#include "motor.h"
+#include "board_runtime.h"
 
 /* USER CODE END Includes */
 
@@ -97,7 +95,10 @@ int main(void)
   MX_I2C1_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-  App_Init(&huart1, &hi2c1);
+  if (!BoardRuntime_Init(&huart1, &hi2c1))
+  {
+    Error_Handler();
+  }
 
   /* USER CODE END 2 */
 
@@ -108,7 +109,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    App_Loop();
+    BoardRuntime_Run();
   }
   /* USER CODE END 3 */
 }
@@ -199,13 +200,6 @@ static void MX_USART1_UART_Init(void)
   */
 static void MX_GPIO_Init(void)
 {
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-  const uint16_t motor_a_pins = MOTOR_LF_PWM_PIN | MOTOR_LR_PWM_PIN |
-                                MOTOR_LF_IN1_PIN | MOTOR_LF_IN2_PIN |
-                                MOTOR_LR_IN1_PIN | MOTOR_LR_IN2_PIN |
-                                MOTOR_RF_IN1_PIN | MOTOR_RF_IN2_PIN |
-                                MOTOR_RR_IN1_PIN | MOTOR_RR_IN2_PIN;
-  const uint16_t motor_b_pins = MOTOR_RF_PWM_PIN | MOTOR_RR_PWM_PIN;
   /* USER CODE BEGIN MX_GPIO_Init_1 */
 
   /* USER CODE END MX_GPIO_Init_1 */
@@ -216,16 +210,7 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_AFIO_CLK_ENABLE();
   __HAL_AFIO_REMAP_SWJ_NOJTAG();
 
-  /* Establish a safe low level before changing any motor pin to output mode. */
-  GPIOA->BSRR = (uint32_t)motor_a_pins << 16U;
-  GPIOB->BSRR = (uint32_t)motor_b_pins << 16U;
-  GPIO_InitStruct.Pin = motor_a_pins;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-  GPIO_InitStruct.Pin = motor_b_pins;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  /* Motor pins remain at their reset-safe level until BoardRuntime_Init(). */
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -243,7 +228,7 @@ static void MX_GPIO_Init(void)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  Motor_EmergencyStop();
+  BoardRuntime_FaultStop();
   __disable_irq();
   while (1)
   {

@@ -71,7 +71,7 @@ __attribute__((weak)) int _read(int file, char *ptr, int len)
 
   for (DataIdx = 0; DataIdx < len; DataIdx++)
   {
-    *ptr++ = __io_getchar();
+		*ptr++ = (char)__io_getchar();
   }
 
   return len;
@@ -92,7 +92,7 @@ __attribute__((weak)) int _write(int file, char *ptr, int len)
 int _close(int file)
 {
   (void)file;
-  return -1;
+	return -1;
 }
 
 
@@ -142,7 +142,7 @@ int _unlink(char *name)
 clock_t _times(struct tms *buf)
 {
   (void)buf;
-  return -1;
+  return (clock_t)-1;
 }
 
 int _stat(const char *file, struct stat *st)

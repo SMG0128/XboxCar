@@ -30,22 +30,39 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/ssd1306_simple.c
-    Core/Src/app.c
-    Core/Src/control_mixer.c
-    Core/Src/control_protocol.c
-    Core/Src/control_system.c
-    Core/Src/motor.c
-    Core/Src/soft_pwm.c
-    Core/Src/ultrasonic.c
+    App/Src/xbox_protocol.c
+    App/Src/motor.c
+    App/Src/ultrasonic.c
+    App/Src/safety_controller.c
+    App/Src/diagnostics.c
+    App/Src/control_system.c
+    Board/Src/board_runtime.c
 )
 
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add project-owned include paths here.
+    App/Inc
+    Board/Inc
+)
+
+target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+    -Wshadow
+    -Wconversion
+    -Wsign-conversion
 )
 
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     # Add project-owned symbols here.
 )
+
+option(XBOXCAR_ENABLE_ULTRASONIC
+    "Enable four HC-SR04 inputs after fitting 3.3 V level shifting" OFF)
+if(XBOXCAR_ENABLE_ULTRASONIC)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
+        APP_FEATURE_ULTRASONIC=1)
+endif()
 
 # Remove a spurious libob.a dependency when C++ files are enabled.
 list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)

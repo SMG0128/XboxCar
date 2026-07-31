@@ -7,7 +7,8 @@
 #define SSD1306_WIDTH 128U
 #define SSD1306_HEIGHT 64U
 #define SSD1306_BUFFER_SIZE (SSD1306_WIDTH * SSD1306_HEIGHT / 8U)
-#define SSD1306_TIMEOUT_MS 100U
+#define SSD1306_PAGE_COUNT 8U
+#define SSD1306_TIMEOUT_MS 20U
 
 static I2C_HandleTypeDef *display_i2c;
 static uint8_t display_buffer[SSD1306_BUFFER_SIZE];
@@ -45,6 +46,32 @@ static bool FlushDisplay(void)
                            I2C_MEMADD_SIZE_8BIT, display_buffer,
                            sizeof(display_buffer),
                            SSD1306_TIMEOUT_MS) == HAL_OK;
+}
+
+bool SSD1306_FlushPage(uint8_t page)
+{
+  uint8_t address_commands[6];
+
+  if (display_i2c == NULL || page >= SSD1306_PAGE_COUNT)
+  {
+    return false;
+  }
+
+  address_commands[0] = 0x21U;
+  address_commands[1] = 0x00U;
+  address_commands[2] = 0x7fU;
+  address_commands[3] = 0x22U;
+  address_commands[4] = page;
+  address_commands[5] = page;
+  if (!WriteCommands(address_commands, sizeof(address_commands)))
+  {
+    return false;
+  }
+
+  return HAL_I2C_Mem_Write(
+             display_i2c, SSD1306_ADDRESS, 0x40U, I2C_MEMADD_SIZE_8BIT,
+             &display_buffer[(uint16_t)page * SSD1306_WIDTH], SSD1306_WIDTH,
+             SSD1306_TIMEOUT_MS) == HAL_OK;
 }
 
 static void SetPixel(uint8_t x, uint8_t y)
@@ -278,7 +305,7 @@ bool SSD1306_Init(I2C_HandleTypeDef *i2c)
   return FlushDisplay();
 }
 
-bool SSD1306_ShowControl(bool connected, int16_t left, int16_t right)
+bool SSD1306_RenderControl(bool connected, int16_t left, int16_t right)
 {
   char vertical_text[12];
   char horizontal_text[12];
@@ -295,7 +322,7 @@ bool SSD1306_ShowControl(bool connected, int16_t left, int16_t right)
   if (!connected)
   {
     DrawText2x(22U, 24U, "No Xbox");
-    return FlushDisplay();
+    return true;
   }
 
   vertical_speed = ((int32_t)left + (int32_t)right) / 2;
@@ -333,5 +360,24 @@ bool SSD1306_ShowControl(bool connected, int16_t left, int16_t right)
 
   DrawText2x(4U, 7U, vertical_text);
   DrawText2x(4U, 39U, horizontal_text);
-  return FlushDisplay();
+  return true;
+}
+
+bool SSD1306_ShowControl(bool connected, int16_t left, int16_t right)
+{
+  uint8_t page;
+
+  if (!SSD1306_RenderControl(connected, left, right))
+  {
+    return false;
+  }
+
+  for (page = 0U; page < SSD1306_PAGE_COUNT; ++page)
+  {
+    if (!SSD1306_FlushPage(page))
+    {
+      return false;
+    }
+  }
+  return true;
 }
