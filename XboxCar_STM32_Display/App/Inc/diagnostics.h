@@ -36,6 +36,48 @@ typedef struct {
   uint32_t duplicate_frames;
   uint32_t rx_overflows;
   uint32_t communication_timeouts;
+  uint32_t v1_frames;
+  uint32_t v2_frames;
+
+  /* ----------------------------------------------------------------- */
+  /* Controller presence and link health                                */
+  /* ----------------------------------------------------------------- */
+
+  /*
+   * The single answer to "is there usable Xbox input right now". The display,
+   * the motor arbitration and the log all read this one field, which is what
+   * stops the three from disagreeing.
+   */
+  uint8_t xbox_connected;
+  /* Set while an accepted frame is inside the timeout window. */
+  uint8_t frame_valid;
+  /* NoXboxReason. NONE only while xbox_connected is true. */
+  uint8_t no_xbox_reason;
+  /* Frame format of the last accepted frame: 1 or 2, 0 before the first. */
+  uint8_t protocol_version;
+  /* Reason code of the most recent protocol rejection (XboxRejectReason). */
+  uint8_t last_reject_reason;
+
+  /* Timestamp of the last accepted frame, and its age at snapshot time. */
+  uint32_t last_rx_ms;
+  uint32_t control_age_ms;
+
+  /* ----------------------------------------------------------------- */
+  /* Operator input, exactly as received                                */
+  /* ----------------------------------------------------------------- */
+
+  /* Raw stick counts from the controller, vehicle sign convention. */
+  int16_t raw_up_down;
+  int16_t raw_left_right;
+
+  /*
+   * The two control dimensions, -MOTOR_SPEED_MAX..+MOTOR_SPEED_MAX.
+   * up_down_speed > 0 is forward, left_right_speed > 0 steers right.
+   * Zeroed the instant the link is not usable, so the display can never show
+   * a stale stick position.
+   */
+  int16_t up_down_speed;
+  int16_t left_right_speed;
 
   /* The three stages of the speed pipeline, for comparison at a glance. */
   int16_t requested_left;  /* straight from the accepted frame */
@@ -45,8 +87,13 @@ typedef struct {
   int16_t actual_left; /* after the ramp */
   int16_t actual_right;
 
-  int16_t motor_speed[MOTOR_COUNT];
-  uint16_t motor_pwm[MOTOR_COUNT];
+  int16_t motor_target[MOTOR_COUNT]; /* signed, before the ramp */
+  int16_t motor_speed[MOTOR_COUNT];  /* signed, after the ramp */
+  uint16_t motor_pwm[MOTOR_COUNT];   /* duty actually programmed, 0..SOFT_PWM_RESOLUTION */
+  uint8_t motor_dir[MOTOR_COUNT];    /* MotorDirection, after inversion */
+
+  /* Set for the periods in which a safety rule forced every target to zero. */
+  uint8_t safety_forced_zero;
 
   uint16_t ultrasonic_raw_mm[ULTRASONIC_COUNT];
   uint16_t ultrasonic_filtered_mm[ULTRASONIC_COUNT];
@@ -84,6 +131,15 @@ void Diagnostics_Init(AppDebugState *state);
  */
 void Diagnostics_RecordFault(AppDebugState *state, uint16_t fault_code,
                              uint32_t internal_flag, uint32_t now_ms);
+
+/* Stable short name for a NoXboxReason, shared by the log and the tests. */
+const char *Diagnostics_NoXboxReasonName(uint8_t reason);
+
+/* Stable short name for a ControlState. */
+const char *Diagnostics_ControlStateName(uint8_t state);
+
+/* Stable short name for a MotorDirection. */
+const char *Diagnostics_MotorDirectionName(uint8_t direction);
 
 #ifdef __cplusplus
 }

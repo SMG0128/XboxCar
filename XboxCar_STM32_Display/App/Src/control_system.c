@@ -57,9 +57,21 @@ static void AcceptFrame(ControlSystem *system, const XboxControlFrame *frame,
 {
   system->last_accepted_ms = now_ms;
   system->have_accepted_frame = true;
+  system->rejects_since_accept = 0U;
 
   system->debug.last_command = frame->command;
   system->debug.last_sequence = frame->sequence;
+
+  /*
+   * Presence, the raw sticks and the protocol version describe the link rather
+   * than the request, so they are recorded even for a frame that commands a
+   * stop. Without that, an emergency or a NoInput frame would blank the display
+   * instead of showing a connected controller at rest.
+   */
+  system->frame_connected = frame->connected;
+  system->protocol_version = frame->version;
+  system->raw_up_down = frame->raw_up_down;
+  system->raw_left_right = frame->raw_left_right;
 
   if (frame->emergency)
   {
@@ -76,6 +88,8 @@ static void AcceptFrame(ControlSystem *system, const XboxControlFrame *frame,
     system->recovery_count = 0U;
     system->requested_left = 0;
     system->requested_right = 0;
+    system->requested_up_down = 0;
+    system->requested_left_right = 0;
     return;
   }
 
@@ -103,12 +117,16 @@ static void AcceptFrame(ControlSystem *system, const XboxControlFrame *frame,
      */
     system->requested_left = 0;
     system->requested_right = 0;
+    system->requested_up_down = 0;
+    system->requested_left_right = 0;
     return;
   }
 
   system->recovery_count = 0U;
   system->requested_left = frame->left;
   system->requested_right = frame->right;
+  system->requested_up_down = frame->up_down;
+  system->requested_left_right = frame->left_right;
 }
 
 /* Drains the receive ring, applying each outcome. */
@@ -150,9 +168,61 @@ static void ProcessIncoming(ControlSystem *system, uint32_t now_ms)
       default:
         /* Any rejected frame breaks a recovery run in progress. */
         system->recovery_count = 0U;
+        if (system->rejects_since_accept < 0xFFFFU)
+        {
+          ++system->rejects_since_accept;
+        }
         break;
     }
   }
+}
+
+/*
+ * Why there is no usable controller input, or NONE.
+ *
+ * Evaluated in the same order as the control priority chain so the reason on
+ * the display and in the log names the condition that actually stopped the
+ * vehicle, not a lesser one that happens to also be true.
+ */
+static NoXboxReason DecideNoXboxReason(const ControlSystem *system,
+                                       ControlState state)
+{
+  if (state == CONTROL_STATE_INTERNAL_FAULT)
+  {
+    return NO_XBOX_REASON_INTERNAL_FAULT;
+  }
+
+  if (state == CONTROL_STATE_EMERGENCY_LOCKED)
+  {
+    return NO_XBOX_REASON_EMERGENCY_LOCKED;
+  }
+
+  if (state == CONTROL_STATE_STARTUP_SAFE)
+  {
+    return NO_XBOX_REASON_NO_FRAME_YET;
+  }
+
+  if (state == CONTROL_STATE_COMM_TIMEOUT)
+  {
+    /*
+     * A link delivering bytes that never validate looks identical to a dead
+     * link from the watchdog's point of view, but they need different repairs:
+     * one is a wiring or baud fault, the other is a cut wire or a stopped
+     * emitter.
+     */
+    if (system->rejects_since_accept >= COMM_FRAME_ERROR_LIMIT)
+    {
+      return NO_XBOX_REASON_FRAME_ERRORS;
+    }
+    return NO_XBOX_REASON_CONTROL_TIMEOUT;
+  }
+
+  if (!system->frame_connected)
+  {
+    return NO_XBOX_REASON_ESP_REPORTED_DISCONNECTED;
+  }
+
+  return NO_XBOX_REASON_NONE;
 }
 
 /* Chooses the state for this period, highest priority first. */
@@ -187,6 +257,8 @@ static void PublishSnapshot(ControlSystem *system, uint32_t now_ms,
 {
   AppDebugState *debug = &system->debug;
   XboxProtocolStats stats;
+  NoXboxReason reason;
+  bool has_xbox;
   uint8_t index;
 
   debug->uptime_ms = now_ms;
@@ -200,6 +272,43 @@ static void PublishSnapshot(ControlSystem *system, uint32_t now_ms,
   debug->sequence_errors = stats.sequence_errors;
   debug->duplicate_frames = stats.duplicate_frames;
   debug->rx_overflows = stats.rx_overflows;
+  debug->v1_frames = stats.v1_frames;
+  debug->v2_frames = stats.v2_frames;
+  debug->last_reject_reason = XboxProtocol_GetLastRejectReason(&system->protocol);
+
+  reason = DecideNoXboxReason(system, system->state);
+  has_xbox = (reason == NO_XBOX_REASON_NONE);
+
+  debug->no_xbox_reason = (uint8_t)reason;
+  debug->xbox_connected = has_xbox ? 1U : 0U;
+  debug->frame_valid = (system->state == CONTROL_STATE_ONLINE) ? 1U : 0U;
+  debug->protocol_version = system->protocol_version;
+  debug->last_rx_ms = system->last_accepted_ms;
+  debug->control_age_ms =
+      system->have_accepted_frame
+          ? (uint32_t)(now_ms - system->last_accepted_ms)
+          : now_ms;
+
+  /*
+   * The operator axes are published only while the input is usable. Holding the
+   * last stick position through a timeout would put a speed on the OLED that no
+   * longer commands anything, which is exactly the failure the bring-up
+   * requirement calls out.
+   */
+  if (has_xbox)
+  {
+    debug->up_down_speed = system->requested_up_down;
+    debug->left_right_speed = system->requested_left_right;
+    debug->raw_up_down = system->raw_up_down;
+    debug->raw_left_right = system->raw_left_right;
+  }
+  else
+  {
+    debug->up_down_speed = 0;
+    debug->left_right_speed = 0;
+    debug->raw_up_down = 0;
+    debug->raw_left_right = 0;
+  }
 
   debug->requested_left = system->requested_left;
   debug->requested_right = system->requested_right;
@@ -211,10 +320,41 @@ static void PublishSnapshot(ControlSystem *system, uint32_t now_ms,
   for (index = 0U; index < MOTOR_COUNT; ++index)
   {
     MotorOutput output;
+
     debug->motor_speed[index] = Motor_GetSpeed(&system->motor, index);
+    debug->motor_target[index] = Motor_GetTarget(&system->motor, index);
     (void)Motor_GetOutput(&system->motor, index, &output);
     debug->motor_pwm[index] = output.duty;
+
+    /*
+     * Taken from the pin pair rather than from the sign of the speed, so the
+     * log reports the direction the TB6612 is actually being told to drive,
+     * inversion included. That is the value worth checking against a wheel.
+     */
+    if (output.in1 && !output.in2)
+    {
+      debug->motor_dir[index] = (uint8_t)MOTOR_DIR_FORWARD;
+    }
+    else if (!output.in1 && output.in2)
+    {
+      debug->motor_dir[index] = (uint8_t)MOTOR_DIR_REVERSE;
+    }
+    else
+    {
+      debug->motor_dir[index] = (uint8_t)MOTOR_DIR_STOP;
+    }
   }
+
+  /*
+   * True when a rule above the operator zeroed the output: any non-online
+   * state, or an obstacle limit that took a non-zero request down to nothing.
+   */
+  debug->safety_forced_zero =
+      ((system->state != CONTROL_STATE_ONLINE) ||
+       ((limited->limited_left == 0) && (limited->limited_right == 0) &&
+        ((system->requested_left != 0) || (system->requested_right != 0))))
+          ? 1U
+          : 0U;
 
   if (sensors != NULL)
   {
@@ -256,6 +396,7 @@ void ControlSystem_Update(ControlSystem *system, uint32_t now_ms,
 {
   SafetyOutput limited;
   ControlState state;
+  bool drive;
 
   if (system == NULL)
   {
@@ -286,9 +427,19 @@ void ControlSystem_Update(ControlSystem *system, uint32_t now_ms,
 
     system->requested_left = 0;
     system->requested_right = 0;
+    system->requested_up_down = 0;
+    system->requested_left_right = 0;
   }
 
-  if (state == CONTROL_STATE_ONLINE)
+  /*
+   * One predicate decides whether the vehicle may move, and the same predicate
+   * decides what the display and the log say. An ESP32 that reports the
+   * controller as absent stops the vehicle exactly as hard as a timeout does:
+   * frames are still arriving, but none of them carry an operator.
+   */
+  drive = (state == CONTROL_STATE_ONLINE) && system->frame_connected;
+
+  if (drive)
   {
 #if APP_FEATURE_ULTRASONIC
     SafetyInput input;
@@ -325,11 +476,14 @@ void ControlSystem_Update(ControlSystem *system, uint32_t now_ms,
   else
   {
     /*
-     * Every non-online state stops the vehicle without a deceleration curve.
+     * Every non-driving state stops the vehicle without a deceleration curve.
      * Disabling the output forces the speeds to zero in the same call, which is
-     * what "immediately" has to mean for a timeout or an emergency.
+     * what "immediately" has to mean for a timeout, a disconnect or an
+     * emergency. The previous frame's speeds are discarded rather than held.
      */
     Motor_SetOutputEnabled(&system->motor, false);
+    system->requested_up_down = 0;
+    system->requested_left_right = 0;
     system->safety.front_blocked = false;
     system->safety.rear_blocked = false;
     system->safety.left_limited = false;

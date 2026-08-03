@@ -112,7 +112,7 @@ static void TestFormatErrors(void)
 
   /* Wrong header. */
   XboxProtocol_Init(&protocol);
-  PushRaw(&protocol, "$XD,0001,+0800,+0800,0025,1D\r\n");
+  PushRaw(&protocol, "$XZ,0001,+0800,+0800,0025,1D\r\n");
   TEST_EQ(PollOnce(&protocol, &frame), XBOX_POLL_ERROR);
   TEST_EQ(protocol.stats.format_errors, 1);
 
@@ -551,6 +551,30 @@ static void TestSequenceResetAcceptsAnything(void)
   TEST_EQ(frame.left, 300);
 }
 
+static void TestV2FrameAcceptedWithOperatorAxes(void)
+{
+  XboxProtocol protocol;
+  XboxControlFrame frame;
+  const char text[] =
+      "$XD,0100,+0800,+0350,+0800,+0529,+0511,+0300,03,0000,3C\r\n";
+
+  TEST_CASE("v2 frame preserves axes, raw sticks and flags");
+
+  XboxProtocol_Init(&protocol);
+  PushRaw(&protocol, text);
+  TEST_EQ(PollOnce(&protocol, &frame), XBOX_POLL_FRAME);
+  TEST_EQ(frame.version, 2);
+  TEST_EQ(frame.left, 800);
+  TEST_EQ(frame.right, 350);
+  TEST_EQ(frame.up_down, 800);
+  TEST_EQ(frame.left_right, 529);
+  TEST_EQ(frame.raw_up_down, 511);
+  TEST_EQ(frame.raw_left_right, 300);
+  TEST_EQ(frame.flags, XBOX_FLAG_CONNECTED | XBOX_FLAG_HAS_SAMPLE);
+  TEST_CHECK(frame.connected);
+  TEST_CHECK(frame.has_sample);
+}
+
 int run_protocol_tests(void)
 {
   printf("-- protocol --\n");
@@ -575,5 +599,6 @@ int run_protocol_tests(void)
   TestSequenceWrap();
   TestEsp32RestartRebaselines();
   TestSequenceResetAcceptsAnything();
+  TestV2FrameAcceptedWithOperatorAxes();
   return 0;
 }

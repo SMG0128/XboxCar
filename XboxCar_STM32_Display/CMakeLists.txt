@@ -35,6 +35,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     App/Src/ultrasonic.c
     App/Src/safety_controller.c
     App/Src/diagnostics.c
+    App/Src/debug_log.c
+    App/Src/control_report.c
     App/Src/control_system.c
     Board/Src/board_runtime.c
 )

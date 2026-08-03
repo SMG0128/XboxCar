@@ -19,7 +19,7 @@
 /* ------------------------------------------------------------------------- */
 
 /* Bumped whenever the meaning of a value below changes incompatibly. */
-#define CONFIG_VERSION 1U
+#define CONFIG_VERSION 2U
 
 /* ------------------------------------------------------------------------- */
 /* Feature switches                                                           */
@@ -140,6 +140,13 @@
 /* Sequence numbers wrap here, matching the ESP32 emitter. */
 #define COMM_SEQ_MODULUS 10000U
 
+/*
+ * Rejected frames since the last accepted one after which the link is reported
+ * as delivering corrupt data rather than as silent. Three consecutive failures
+ * is past any single-bit glitch and well inside the timeout window at 50 Hz.
+ */
+#define COMM_FRAME_ERROR_LIMIT 3U
+
 /* ------------------------------------------------------------------------- */
 /* Ultrasonic                                                                 */
 /* ------------------------------------------------------------------------- */
@@ -218,8 +225,20 @@
 /* Display                                                                    */
 /* ------------------------------------------------------------------------- */
 
-/* One page pushed per tick keeps the blocking I2C write bounded to ~3 ms. */
-#define APP_DISPLAY_TICK_MS 50U
+/*
+ * How often the snapshot is re-read and the two text lines re-rendered. 10 Hz
+ * is fast enough to look live and slow enough that the panel is not the reason
+ * a control period runs late.
+ */
+#define APP_DISPLAY_RENDER_MS 100U
+
+/*
+ * One page pushed per tick keeps the blocking I2C write bounded to ~3 ms. Only
+ * pages whose content actually changed are pushed, so a steady stick costs no
+ * I2C traffic at all and a changed speed costs the two or three pages the digits
+ * live in rather than a full frame.
+ */
+#define APP_DISPLAY_TICK_MS 10U
 
 /* Automatic page cycling. */
 #define APP_DISPLAY_PAGE_COUNT 5U
@@ -230,6 +249,53 @@
 
 /* Short enough that a missing panel cannot stall a control period for long. */
 #define APP_DISPLAY_I2C_TIMEOUT_MS 20U
+
+/* ------------------------------------------------------------------------- */
+/* Debug logging                                                              */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * The PCB has one UART header. USART1 carries the ESP32 control frames on PB7
+ * (RX) and the diagnostic log out on PB6 (TX). Only one device may drive PB7,
+ * so the USB-TTL adapter must have its TX left disconnected: see the protocol
+ * document. Both roles share one baud rate because they share one peripheral.
+ */
+#define DEBUG_UART_BAUD 115200U
+
+/* Master switch for the diagnostic log. The build system overrides these. */
+#ifndef XBOXCAR_DEBUG_LOG
+#define XBOXCAR_DEBUG_LOG 1
+#endif
+
+/* Per-channel PWM lines, the highest volume category. */
+#ifndef XBOXCAR_PWM_LOG
+#define XBOXCAR_PWM_LOG 1
+#endif
+
+/*
+ * Transmit ring. Sized to hold the whole boot banner plus the first control
+ * snapshot, because those two collide: the banner is still draining at 115200
+ * when the first control period completes. In steady state the log generates
+ * roughly 2.4 kB/s against a 11.5 kB/s drain, so the ring is never near full.
+ */
+#define DEBUG_LOG_RING_SIZE 2048U
+
+/* Longest single formatted line, including the CRLF. */
+#define DEBUG_LOG_LINE_MAX 128U
+
+/* Full snapshot cadence when nothing has changed. */
+#define DEBUG_LOG_SNAPSHOT_MS 250U
+
+/* Duty step, in PWM counts, that counts as a change worth reporting at once. */
+#define DEBUG_LOG_PWM_CHANGE_STEP 3U
+
+/* Floor on the interval between protocol rejection reports. */
+#define DEBUG_LOG_PROTO_ERROR_MS 500U
+
+/* Bytes handed to the UART per main loop pass. Bounded so the log can never
+ * monopolise the loop, and small because the loop runs far faster than the
+ * transmitter empties. */
+#define DEBUG_LOG_BYTES_PER_PASS 8U
 
 /* ------------------------------------------------------------------------- */
 /* Compile-time checks                                                        */
@@ -298,5 +364,26 @@ _Static_assert(SAFETY_SENSOR_FAULT_POLICY == SAFETY_FAIL_OPEN ||
 
 _Static_assert(APP_DISPLAY_PAGE_COUNT > 0U, "display needs at least one page");
 _Static_assert(APP_DISPLAY_TICK_MS > 0U, "display tick must be non-zero");
+_Static_assert(APP_DISPLAY_RENDER_MS >= APP_DISPLAY_TICK_MS,
+               "re-rendering faster than pages can be flushed wastes work");
+
+_Static_assert((DEBUG_LOG_RING_SIZE & (DEBUG_LOG_RING_SIZE - 1U)) == 0U,
+               "debug log ring size must be a power of two");
+_Static_assert(DEBUG_LOG_RING_SIZE >= 512U,
+               "ring cannot hold one full four-channel snapshot");
+_Static_assert(DEBUG_LOG_LINE_MAX >= 64U && DEBUG_LOG_LINE_MAX < DEBUG_LOG_RING_SIZE,
+               "log line buffer must be usable and smaller than the ring");
+_Static_assert(DEBUG_LOG_BYTES_PER_PASS > 0U,
+               "the log would never drain");
+_Static_assert(DEBUG_LOG_SNAPSHOT_MS >= 200U && DEBUG_LOG_SNAPSHOT_MS <= 500U,
+               "snapshot cadence outside the agreed 200..500 ms band");
+
+/*
+ * The bring-up requirement is that stale control data can never survive longer
+ * than half a second. Anything below a few control periods would trip on normal
+ * packet loss instead.
+ */
+_Static_assert(COMM_TIMEOUT_MS >= 300U && COMM_TIMEOUT_MS <= 500U,
+               "communication timeout outside the agreed 300..500 ms band");
 
 #endif /* APP_CONFIG_H */

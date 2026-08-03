@@ -29,6 +29,8 @@ add_executable(xboxcar_tests
     ${APP_DIR}/Src/ultrasonic.c
     ${APP_DIR}/Src/safety_controller.c
     ${APP_DIR}/Src/diagnostics.c
+    ${APP_DIR}/Src/debug_log.c
+    ${APP_DIR}/Src/control_report.c
     ${APP_DIR}/Src/control_system.c
 
     test_framework.c
@@ -39,6 +41,7 @@ add_executable(xboxcar_tests
     test_safety.c
     test_control.c
     test_system.c
+    test_report.c
     test_main.c
 )
 

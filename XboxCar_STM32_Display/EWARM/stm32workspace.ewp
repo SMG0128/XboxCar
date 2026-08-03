@@ -1092,6 +1092,12 @@
           <name>$PROJ_DIR$/../App/Src/diagnostics.c</name>
         </file>
         <file>
+          <name>$PROJ_DIR$/../App/Src/debug_log.c</name>
+        </file>
+        <file>
+          <name>$PROJ_DIR$/../App/Src/control_report.c</name>
+        </file>
+        <file>
           <name>$PROJ_DIR$/../App/Src/control_system.c</name>
         </file>
       </group>

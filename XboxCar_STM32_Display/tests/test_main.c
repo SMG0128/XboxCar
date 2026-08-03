@@ -17,6 +17,7 @@ int main(void)
   (void)run_safety_tests();
   (void)run_control_tests();
   (void)run_system_tests();
+  (void)run_report_tests();
 
   return Test_Summary();
 }

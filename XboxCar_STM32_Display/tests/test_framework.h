@@ -68,5 +68,6 @@ int run_control_tests(void);
 int run_safety_tests(void);
 int run_ultrasonic_tests(void);
 int run_system_tests(void);
+int run_report_tests(void);
 
 #endif /* TEST_FRAMEWORK_H */

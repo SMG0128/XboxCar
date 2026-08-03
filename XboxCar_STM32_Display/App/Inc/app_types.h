@@ -116,4 +116,42 @@ typedef enum {
   CONTROL_STATE_INTERNAL_FAULT = 4
 } ControlState;
 
+/* ------------------------------------------------------------------------- */
+/* Controller presence                                                        */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * Why the vehicle is not accepting stick input. Exactly one reason is published
+ * per control period; the display turns it into "No Xbox" and the debug log
+ * prints the name, so an operator watching either one sees the same cause.
+ *
+ * Ordered by the arbitration priority in ControlSystem_Update, most severe
+ * first, so a numerically larger reason never masks a more serious one.
+ */
+typedef enum {
+  NO_XBOX_REASON_NONE = 0,
+  /* An internal fault latched the output stage off. */
+  NO_XBOX_REASON_INTERNAL_FAULT = 1,
+  /* Emergency stop latched, waiting for the recovery run. */
+  NO_XBOX_REASON_EMERGENCY_LOCKED = 2,
+  /* Powered up but no frame has ever passed validation. */
+  NO_XBOX_REASON_NO_FRAME_YET = 3,
+  /* No accepted frame inside COMM_TIMEOUT_MS. Covers a cut ESP32 link. */
+  NO_XBOX_REASON_CONTROL_TIMEOUT = 4,
+  /* Frames are arriving and the ESP32 says the controller is not paired. */
+  NO_XBOX_REASON_ESP_REPORTED_DISCONNECTED = 5,
+  /* Frames are arriving but consecutively failing validation. */
+  NO_XBOX_REASON_FRAME_ERRORS = 6
+} NoXboxReason;
+
+/* ------------------------------------------------------------------------- */
+/* Motor direction, as published to the diagnostics snapshot                  */
+/* ------------------------------------------------------------------------- */
+
+typedef enum {
+  MOTOR_DIR_STOP = 0,
+  MOTOR_DIR_FORWARD = 1,
+  MOTOR_DIR_REVERSE = 2
+} MotorDirection;
+
 #endif /* APP_TYPES_H */

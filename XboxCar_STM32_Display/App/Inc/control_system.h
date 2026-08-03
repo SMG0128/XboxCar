@@ -69,6 +69,27 @@ typedef struct {
   /* Most recent accepted request, before limiting. */
   int16_t requested_left;
   int16_t requested_right;
+
+  /*
+   * The operator's two dimensions and the raw stick counts behind them, from
+   * the most recent accepted frame. Held here rather than re-derived from the
+   * motor pair so the display shows what was actually commanded.
+   */
+  int16_t requested_up_down;
+  int16_t requested_left_right;
+  int16_t raw_up_down;
+  int16_t raw_left_right;
+
+  /* What the last accepted frame said about the controller itself. */
+  bool frame_connected;
+  uint8_t protocol_version;
+
+  /*
+   * Rejected frames since the last accepted one. A link that is delivering
+   * bytes which never validate is a different failure from a silent link, and
+   * the operator needs to be told which one they have.
+   */
+  uint16_t rejects_since_accept;
 } ControlSystem;
 
 /* Brings up every submodule with the output stage disabled. */
