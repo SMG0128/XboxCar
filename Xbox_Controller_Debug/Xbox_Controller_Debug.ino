@@ -1,4 +1,5 @@
 #include <Bluepad32.h>
+#include <bt/uni_bt_allowlist.h>
 
 #include "XboxCarControl.h"
 
@@ -20,6 +21,13 @@ using xboxcar::XboxDriveInput;
 
 constexpr uint32_t kDiagnosticPeriodMs = 250;
 constexpr uint8_t kMaxControlCatchUpSteps = 5;
+
+// Windows reported this controller as a public BLE address (type 0). BTstack's
+// bd_addr_t byte order matches the usual colon-separated address notation.
+bd_addr_t kXboxControllerBluetoothAddress = {
+    0x40, 0x8E, 0x2C, 0x88, 0xEF, 0xC7,
+};
+constexpr char kXboxControllerBluetoothAddressText[] = "40:8E:2C:88:EF:C7";
 
 ControllerPtr controllers[BP32_MAX_GAMEPADS];
 ControllerPtr primaryController;
@@ -145,6 +153,24 @@ void onDisconnectedController(ControllerPtr controller) {
   }
 }
 
+void configureXboxControllerAllowlist() {
+  // The allowlist is applied by Bluepad32 while it discovers and connects to
+  // devices, so unrelated paired controllers are rejected before callbacks.
+  uni_bt_allowlist_remove_all();
+  const bool added = uni_bt_allowlist_add_addr(kXboxControllerBluetoothAddress);
+  uni_bt_allowlist_set_enabled(true);
+
+  if (!added) {
+    LOG_EVENT("[SAFETY] Xbox address allowlist setup failed for %s; no other "
+              "controller is accepted\n",
+              kXboxControllerBluetoothAddressText);
+    return;
+  }
+
+  LOG_EVENT("[EVENT] Xbox address allowlist enabled: %s\n",
+            kXboxControllerBluetoothAddressText);
+}
+
 void samplePrimaryController() {
   ControllerPtr controller = primaryController;
   if (controller == nullptr || !controller->isConnected()) {
@@ -244,6 +270,7 @@ void setup() {
   forceZeroOutput(DriveCommand::Stop);
 
   BP32.setup(&onConnectedController, &onDisconnectedController);
+  configureXboxControllerAllowlist();
   BP32.enableVirtualDevice(false);
 
   lastControlMs = millis();
