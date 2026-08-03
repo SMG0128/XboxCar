@@ -91,7 +91,8 @@ class CommandClassifier {
 
 class Stm32Protocol {
  public:
-  static constexpr size_t kFrameBufferSize = 40;
+  /* 57-byte v2 frame plus the NUL terminator; v1 also fits in this buffer. */
+  static constexpr size_t kFrameBufferSize = 64;
 
   bool buildFrame(DriveCommand command,
                   int16_t left,
@@ -99,6 +100,18 @@ class Stm32Protocol {
                   char* output,
                   size_t outputCapacity,
                   uint16_t* usedSequence = nullptr);
+
+  bool buildFrameV2(DriveCommand command,
+                    int16_t left,
+                    int16_t right,
+                    int16_t upDown,
+                    int16_t leftRight,
+                    int16_t rawUpDown,
+                    int16_t rawLeftRight,
+                    uint8_t flags,
+                    char* output,
+                    size_t outputCapacity,
+                    uint16_t* usedSequence = nullptr);
 
   uint16_t nextSequence() const { return sequence_; }
   void setNextSequence(uint16_t sequence) {

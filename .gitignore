@@ -1,0 +1,13 @@
+# Local build outputs
+build/
+*.o
+*.obj
+*.exe
+
+# Runtime and editor noise
+*.log
+*.tmp
+*.bak
+*~
+Thumbs.db
+Desktop.ini

@@ -1,251 +1,87 @@
-# XboxCar ESP32-STM32 控制协议
+# XboxCar ESP32 → STM32 control protocol
 
-| 项目 | 值 |
-| --- | --- |
-| 协议名称 | XboxCar ESP32-STM32 控制协议 |
-| 协议版本 | 1.0 |
-| 修改日期 | 2026-07-30 |
-| 发送端 | ESP32-S3 |
-| 接收端 | STM32 |
-| 传输方式 | UART，ASCII，8N1 |
-| UART | UART0，115200 baud，ESP32 TX GPIO43、RX GPIO44 |
-| 默认发送周期 | 20 ms（50 Hz） |
-| 默认控制周期 | 10 ms（100 Hz） |
+## Current contract
 
-## 1. 系统角色与接线
+ESP32-S3 Bluepad32 sends to STM32F103C8T6 over UART 115200 8N1. GPIO43 is
+ESP32 UART0 TX to STM32 USART1 RX PB7. STM32 PB6/USART1 TX is diagnostics to
+USB-TTL RX only; leave USB-TTL TX disconnected. OLED is I2C1 remap PB8=SCL
+and PB9=SDA. ESP32 sends every 20 ms; STM32 controls every 10 ms.
 
-ESP32-S3 负责连接 Xbox Wireless Controller、读取摇杆、计算左右两组车轮输出、执行平滑加减速，并周期发送控制帧。STM32 负责解析和校验控制帧，再把 `LEFT`、`RIGHT` 转换成实际电机方向与 PWM。
+ESP32 emits v2. STM32 accepts v1 for backward compatibility, but v1 has no
+operator axes and derives them from LEFT/RIGHT.
 
-当前 ESP32 工程没有独立的 STM32 UART 配置，因此复用已验证的 Bluepad32 `Console` UART0 配置，不新建冲突串口：
+## v2 frame
 
-- ESP32 GPIO43（UART0 TX）→ STM32 UART RX；
-- ESP32 GND → STM32 GND；
-- 本协议当前是 ESP32 到 STM32 的单向控制链路，STM32 TX 可以不接；
-- GPIO44 是 ESP32 UART0 RX，当前协议不使用；
-- 开发板板载 CH340 也连接 UART0。调试时可由电脑读取同一 TX 数据，但不要让 CH340 TX 与 STM32 TX 同时驱动 ESP32 RX。
-
-Bluepad32 在启动和蓝牙连接期间可能输出不属于本协议的文本日志。STM32 必须只接收以 `$XC,` 开头、以 `\r\n` 结尾且通过全部格式与 CRC 校验的帧，其余行全部丢弃。
-
-## 2. Xbox 操作方式
-
-只使用：
-
-- `axisY()`：左摇杆 Y，控制前进/后退；
-- `axisRX()`：右摇杆 X，控制左转/右转。
-
-忽略左摇杆 X（`axisX()`）和右摇杆 Y（`axisRY()`）。
-
-Bluepad32 的左摇杆向前通常为负值，ESP32 会取反，因此：
-
-- `throttle = +1000`：全速前进；
-- `throttle = 0`：停止；
-- `throttle = -1000`：全速后退；
-- `steering = +1000`：最大右转；
-- `steering = 0`：直行；
-- `steering = -1000`：最大左转。
-
-Xbox/系统键（Bluepad32 `MISC_BUTTON_SYSTEM`）被定义为紧急停止键。按下时立即发送 `0111,+0000,+0000`；释放后才允许恢复普通控制。
-
-## 3. 归一化、死区与差速
-
-Bluepad32 Xbox 摇杆名义范围为 `-511..+512`（实现容许 `-512` 边界）。ESP32 使用 32 位中间值运算，先检查范围，再归一化为 `-1000..+1000`，避免 `int16_t(-32768)` 取绝对值溢出。绝对值达到 511 时视为满量程，因此两个物理方向都能到达 1000。
-
-死区：
-
-- 左摇杆 Y：8%；
-- 右摇杆 X：10%。
-
-死区内输出为 0。超过死区后，将剩余范围从 0 开始线性重映射到 1000，因此越过边界时不会发生速度台阶。
-
-基础差速公式：
+Exactly 57 ASCII bytes including CRLF:
 
 ```text
-left  = throttle + steering_for_mix
-right = throttle - steering_for_mix
+$XD,<CMD>,<LEFT>,<RIGHT>,<UP_DOWN>,<LEFT_RIGHT>,<RAW_UD>,<RAW_LR>,<FLAGS>,<SEQ>,<CRC>\r\n
 ```
 
-行驶时转向增益为 0.85：
+| Field | Offset | Length | Meaning |
+| --- | ---: | ---: | --- |
+| `$XD` | 0 | 3 | v2 header |
+| `CMD` | 4 | 4 | binary action code |
+| `LEFT` | 9 | 5 | mixed left speed |
+| `RIGHT` | 15 | 5 | mixed right speed |
+| `UP_DOWN` | 21 | 5 | forward/back command |
+| `LEFT_RIGHT` | 27 | 5 | steering command |
+| `RAW_UD` | 33 | 5 | raw left stick, vehicle sign |
+| `RAW_LR` | 39 | 5 | raw right-stick X |
+| `FLAGS` | 45 | 2 | uppercase hexadecimal flags |
+| `SEQ` | 48 | 4 | `0000..9999`, wrapping |
+| `CRC` | 53 | 2 | uppercase hexadecimal XOR |
+| CRLF | 55 | 2 | terminator |
+
+Signed control values are `+0000`/`-0000` in `-1000..+1000`. Raw values are
+diagnostic only and are limited to `-9999..+9999`. Flags are `0x01` connected,
+`0x02` has HID sample, `0x04` emergency, and `0x08` control error.
+
+CRC XORs ASCII bytes from the `X` through the final `SEQ` digit. `$`, CRC and
+CRLF are excluded.
+
+## Commands and directions
+
+`0000` Stop, `0001` Forward, `0010` Reverse, `0011` TurnLeft, `0100`
+TurnRight, `0101` SpinLeft, `0110` SpinRight, `0111` EmergencyStop, `1000`
+NoInput, `1001` Disconnected, and `1111` Error.
+
+`UP_DOWN > 0` is forward, `< 0` reverse, `0` neutral. `LEFT_RIGHT > 0` is
+right, `< 0` left, `0` neutral. Motors use validated LEFT/RIGHT; OLED and
+diagnostics use the operator axes from the same validated snapshot.
+
+## Valid examples
+
+The CRC values below are actual XOR results:
 
 ```text
-steering_for_mix = steering × 850 / 1000
+$XD,1001,+0000,+0000,+0000,+0000,+0000,+0000,00,0000,30\r\n
+$XD,1000,+0000,+0000,+0000,+0000,+0000,+0000,03,0000,32\r\n
+$XD,0001,+1000,+1000,+1000,+0000,-0511,+0000,03,0001,31\r\n
+$XD,0010,-0500,-0500,-0500,+0000,-0256,+0000,03,0002,34\r\n
+$XD,0100,+0800,+0350,+0800,+0529,+0511,+0300,03,0003,3F\r\n
+$XD,0101,-0650,+0650,+0000,-1000,+0000,-0511,03,0004,35\r\n
 ```
 
-`throttle == 0` 时保留原地旋转，并把最大转向输出限制为 650：
+## Receiver, safety and display
+
+STM32 receives into a USART1 ring; parsing, CRC, sequence checks and state
+publication run in the control loop. Noise before `$`, partial/malformed
+frames, stale frames, duplicates and CRC failures are discarded as whole frames
+and cannot refresh the watchdog.
+
+The timeout is 300 ms. On timeout, disconnect, emergency or protocol error,
+STM32 forces all four motor targets and outputs to zero, shows `No Xbox`, and
+logs the reason. Valid frames are required before control resumes; emergency
+also requires the recovery run.
+
+OLED uses the shared `AppDebugState` and shows fixed-width lines such as:
 
 ```text
-steering_for_mix = steering × 650 / 1000
+UP   :072
+LEFT :035
 ```
 
-若任一侧超过 1000，左右两侧按相同比例缩放：
-
-```text
-scale = max(1000, abs(left), abs(right))
-left  = left  × 1000 / scale
-right = right × 1000 / scale
-```
-
-最终 `LEFT`、`RIGHT` 始终在 `-1000..+1000`：
-
-- 正数：该侧车轮向前；
-- 负数：该侧车轮向后；
-- 0：停止；
-- 绝对值：目标速度/PWM 比例。
-
-四轮固定电机的分组为：
-
-```text
-左前 = 左后 = LEFT
-右前 = 右后 = RIGHT
-```
-
-## 4. 平滑加减速
-
-ESP32 每 10 ms 更新 `current_left`、`current_right`：
-
-- 增大绝对值：每周期最多 25；
-- 减小绝对值：每周期最多 40；
-- 0 到 1000 约 400 ms；
-- 1000 到 0 约 250 ms。
-
-目标方向与当前方向相反时，先按减速步长走到 0，下一周期才向反方向按加速步长变化。正常周期帧的 `LEFT`、`RIGHT` 是平滑后的当前输出，不是尚未执行斜坡的瞬时目标。
-
-Xbox 断线、紧急停止或严重输入异常不走斜坡，立即清零并额外发送安全帧。
-
-## 5. ASCII 帧
-
-固定格式：
-
-```text
-$XC,<CMD>,<LEFT>,<RIGHT>,<SEQ>,<CRC>\r\n
-```
-
-合法帧固定为 30 个 ASCII 字节。
-
-| 字段 | 长度 | 含义 |
-| --- | ---: | --- |
-| `$XC` | 3 | 固定帧头 |
-| `,` | 1 | 分隔符 |
-| `CMD` | 4 | 4 位二进制动作码 |
-| `,` | 1 | 分隔符 |
-| `LEFT` | 5 | 带符号十进制数，如 `+0800`、`-0650` |
-| `,` | 1 | 分隔符 |
-| `RIGHT` | 5 | 与 `LEFT` 相同 |
-| `,` | 1 | 分隔符 |
-| `SEQ` | 4 | `0000..9999`，之后回到 `0000` |
-| `,` | 1 | 分隔符 |
-| `CRC` | 2 | 两位大写十六进制 XOR 校验 |
-| `\r\n` | 2 | 完整帧结束符 |
-
-ESP32 在固定缓冲区中一次性组装完整帧，检查 `snprintf` 长度和输出范围后，通过一次 `Console.print(frame)` 提交。
-
-## 6. 动作码
-
-电机控制必须以 `LEFT`、`RIGHT` 为准，`CMD` 只用于状态、日志和额外安全判断。
-
-| CMD | 名称 | 含义 |
-| --- | --- | --- |
-| `0000` | Stop | 有有效 Xbox 数据，当前平滑输出为双零 |
-| `0001` | Forward | 左右两侧均向前 |
-| `0010` | Reverse | 左右两侧均向后 |
-| `0011` | TurnLeft | 行驶中左转，包括前进或后退左转 |
-| `0100` | TurnRight | 行驶中右转，包括前进或后退右转 |
-| `0101` | SpinLeft | `LEFT < 0` 且 `RIGHT > 0` |
-| `0110` | SpinRight | `LEFT > 0` 且 `RIGHT < 0` |
-| `0111` | EmergencyStop | Xbox 系统键或严重安全事件，双零 |
-| `1000` | NoInput | Xbox 已连接，但尚未收到第一份有效 HID 数据，双零 |
-| `1001` | Disconnected | Xbox 连接丢失，双零 |
-| `1111` | Error | 协议组帧失败或摇杆输入越界，双零 |
-
-## 7. CRC 算法
-
-CRC 是 8 位 XOR，不包含 `$`、CRC 字段和 `\r\n`。从帧中的字符 `X` 开始，一直到 `SEQ` 最后一个字符，对每个 ASCII 字节做 XOR：
-
-```c
-uint8_t crc = 0;
-for (每个字节 b，从 'X' 到 SEQ 最后一位) {
-    crc ^= b;
-}
-```
-
-例如：
-
-```text
-待校验文本：XC,0001,+0800,+0800,0025
-CRC：1D
-完整帧：$XC,0001,+0800,+0800,0025,1D\r\n
-```
-
-早期需求示例中的 `3A` 不符合上述 XOR 定义；按字节复算的正确值是 `1D`。STM32 应以算法计算结果为准。
-
-## 8. 发送频率和序号
-
-- ESP32 每 20 ms 固定发送一帧，即 50 Hz；
-- 摇杆不变时仍持续发送；
-- `SEQ` 每成功组装一帧增加 1；
-- `9999` 的下一帧使用 `0000`；
-- Xbox 断线、紧急停止或严重异常时，立即额外发送双零帧，不等待下一个 20 ms 周期；
-- ESP32 重启后先发送 `0000,+0000,+0000`。
-
-## 9. STM32 推荐解析步骤
-
-STM32 建议使用按字节状态机或环形缓冲区：
-
-1. 寻找连续帧头 `$XC,`，忽略此前所有字节和 Bluepad32 文本；
-2. 收集直到完整 `\r\n`，同时设置最大帧长，防止缓冲区越界；
-3. 确认总长度为 30，字段数量和每个逗号位置正确；
-4. 确认 `CMD` 恰好是 4 个 `0/1`；
-5. 确认 `LEFT`、`RIGHT` 是 5 字节带符号十进制，解析后位于 `-1000..+1000`；
-6. 确认 `SEQ` 是 4 位十进制；
-7. 对 `X` 到 `SEQ` 最后一位计算 XOR，与两位大写十六进制 `CRC` 比较；
-8. 只有全部检查通过才同时更新左右电机目标；
-9. 任一步失败都丢弃整帧，不得使用其中部分字段，也不得刷新合法帧超时计时器。
-
-## 10. STM32 超时和安全要求
-
-如果连续 200 ms 没有收到合法控制帧：
-
-```text
-LEFT 目标立即设为 0
-RIGHT 目标立即设为 0
-进入通信失联状态
-```
-
-STM32 还应：
-
-- 对 `0111`、`1001`、`1111` 强制双零，即使数值字段异常也不得驱动电机；
-- 校验 `LEFT`、`RIGHT` 范围后再进行 PWM 换算；
-- 不因重复或跳号帧失控；可记录序号异常用于诊断；
-- 上电默认关闭电机，直到收到第一帧合法控制数据。
-
-## 11. 完整示例
-
-以下 CRC 均是实际 XOR 结果，不是占位符。
-
-| 场景 | 完整帧 | 实际含义 |
-| --- | --- | --- |
-| 停止 | `$XC,0000,+0000,+0000,0001,1A\r\n` | 左右停止 |
-| 半速前进 | `$XC,0001,+0500,+0500,0002,18\r\n` | 左右各 +500 |
-| 全速前进 | `$XC,0001,+1000,+1000,0003,19\r\n` | 左右各 +1000 |
-| 半速后退 | `$XC,0010,-0500,-0500,0004,1E\r\n` | 左右各 -500 |
-| 前进右转 | `$XC,0100,+0800,+0350,0005,11\r\n` | 左侧较快，向右转 |
-| 前进左转 | `$XC,0011,+0350,+0800,0006,13\r\n` | 右侧较快，向左转 |
-| 原地右旋 | `$XC,0110,+0650,-0650,0007,1A\r\n` | 左前、右后，约 65% |
-| 原地左旋 | `$XC,0101,-0650,+0650,0008,15\r\n` | 左后、右前，约 65% |
-| Xbox 断线 | `$XC,1001,+0000,+0000,0009,12\r\n` | 立即安全停车 |
-
-## 12. 异常处理和日志
-
-- 摇杆原始值超出实现容许范围 `-512..+512`：视为控制异常，立即发送 `1111` 双零；
-- 组帧字段越界或缓冲区不足：不发送残缺帧，控制状态进入 Error；
-- Xbox 断开：立即清除旧摇杆值和斜坡状态，发送 `1001` 双零；
-- 紧急停止：立即清除斜坡状态，发送 `0111` 双零；
-- UART 尚未执行 `Console.begin(115200)` 时不组帧、不发送；
-- Bluepad32 `Console.begin()` 本身不返回硬件初始化结果，ESP32 无法从该 API 确认物理接线是否成功；STM32 的 200 ms 超时是最终失联保护。
-
-源码中的 `XBOXCAR_LOG_LEVEL`：
-
-- `0`：默认，仅协议帧；
-- `1`：增加连接、断线和安全事件；
-- `2`：再增加每 250 ms 一次的原始轴、归一化值、目标值、斜坡当前值和 CMD。
-
-日志等级 1/2 会在同一 UART0 上插入非协议文本，仅用于台架调试。STM32 解析器必须按帧头和 CRC 过滤；正式联调建议保持等级 0。
+or `No Xbox`. Startup logs identify MCU, UARTs, OLED and all PWM mappings.
+Runtime logs include `[CTRL]`, `[AXIS]`, `[CMD]`, `[MIX]`, `[PWM1]..[PWM4]`,
+protocol errors and `[SAFE]`, rate limited without blocking UART RX.

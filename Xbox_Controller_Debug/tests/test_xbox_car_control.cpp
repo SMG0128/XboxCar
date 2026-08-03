@@ -167,6 +167,18 @@ void testProtocolCrcAndSequenceWrap() {
                               sizeof(frame)));
 }
 
+void testProtocolV2CarriesAxesAndFlags() {
+  Stm32Protocol protocol;
+  char frame[Stm32Protocol::kFrameBufferSize];
+
+  assert(protocol.buildFrameV2(DriveCommand::TurnRight, 800, 350, 800, 529,
+                               511, 300, 0x03, frame, sizeof(frame)));
+  assert(strcmp(frame,
+                "$XD,0100,+0800,+0350,+0800,+0529,+0511,+0300,03,0000,"
+                "3C\r\n") == 0);
+  assert(strlen(frame) == 57);
+}
+
 }  // namespace
 
 int main() {
@@ -176,6 +188,7 @@ int main() {
   testRampAndDirectionReversal();
   testCommandsAndDisconnectSafety();
   testProtocolCrcAndSequenceWrap();
+  testProtocolV2CarriesAxesAndFlags();
 
   std::cout << "All XboxCar control tests passed.\n";
   return 0;

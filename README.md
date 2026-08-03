@@ -62,7 +62,7 @@ ESP32 GPIO43 (TX) -> STM32 UART RX
 ESP32 GND         -> STM32 GND
 ```
 
-开发板的 USB 转串口也可读取相同控制帧。UART0 可能同时出现 Bluepad32 启动日志，接收端应只解析以 `$XC,` 开头且格式、长度和 CRC 均合法的帧。
+开发板的 USB 转串口也可读取相同控制帧。UART0 可能同时出现 Bluepad32 启动日志，接收端应只解析以 `$XD,` 开头且格式、长度和 CRC 均合法的帧。
 
 ## 手柄操作
 
@@ -78,23 +78,26 @@ ESP32 GND         -> STM32 GND
 
 ## 串口协议
 
-固定帧格式：
+当前发送的是固定 57 字节 v2 帧：
 
 ```text
-$XC,<CMD>,<LEFT>,<RIGHT>,<SEQ>,<CRC>\r\n
+$XD,<CMD>,<LEFT>,<RIGHT>,<UP_DOWN>,<LEFT_RIGHT>,<RAW_UD>,<RAW_LR>,<FLAGS>,<SEQ>,<CRC>\r\n
 ```
 
 示例：
 
 ```text
-$XC,0001,+0800,+0800,0025,1D\r\n
+$XD,0100,+0800,+0350,+0800,+0529,+0511,+0300,03,0000,3C\r\n
 ```
 
 - `CMD`：4 位二进制动作码
 - `LEFT`、`RIGHT`：带符号四位十进制数，范围 `-1000..+1000`
+- `UP_DOWN`、`LEFT_RIGHT`：OLED 和诊断使用的前后/转向量
+- `RAW_UD`、`RAW_LR`：ESP32 读取的原始操作轴
+- `FLAGS`：两位十六进制连接和输入状态标志
 - `SEQ`：`0000..9999` 循环序号
 - `CRC`：从 `X` 到 `SEQ` 末位所有 ASCII 字节的 8 位 XOR
-- 合法帧固定为 30 字节，并以单个 `CRLF` 结束
+- 合法 v2 帧固定为 57 字节，并以单个 `CRLF` 结束
 
 完整字段、动作码、安全规则和 STM32 解析建议见 [config/ESP32_STM32_XBOX_PROTOCOL.md](config/ESP32_STM32_XBOX_PROTOCOL.md)。
 
@@ -133,12 +136,4 @@ STM32 端还应设置 200 ms 合法帧超时；超时后立即关闭电机输出
 
 ## 验证结果
 
-2026-07-30 在 ESP32-S3 与 Xbox Wireless Controller 实机验证：
-
-- 固件编译和烧录成功
-- 手柄连接、停车和前进指令正常
-- 3.21 秒收到 160 个合法控制帧
-- 实测发送频率 49.8 Hz
-- CRC 错误 0
-- 串口行尾为单个 `CRLF`
-- C++ 控制算法单元测试全部通过
+2026-08-03 从 `D:\XboxCar\ESP` 运行 C++ 主机测试，控制算法、v1 兼容组帧和 v2 固定帧/CRC 测试全部通过。当前机器没有安装 Arduino CLI、PlatformIO 或 ESP-IDF，因此本次尚未重新执行完整固件编译、烧录和实机联调；2026-07-30 的实机结果只覆盖此前版本，不能替代本次 v2 固件验证。

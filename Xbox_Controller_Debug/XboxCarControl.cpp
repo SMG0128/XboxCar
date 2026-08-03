@@ -268,4 +268,57 @@ bool Stm32Protocol::buildFrame(DriveCommand command,
   return true;
 }
 
+bool Stm32Protocol::buildFrameV2(DriveCommand command,
+                                 int16_t left,
+                                 int16_t right,
+                                 int16_t upDown,
+                                 int16_t leftRight,
+                                 int16_t rawUpDown,
+                                 int16_t rawLeftRight,
+                                 uint8_t flags,
+                                 char* output,
+                                 size_t outputCapacity,
+                                 uint16_t* usedSequence) {
+  if (output == nullptr || outputCapacity < kFrameBufferSize ||
+      left < -kOutputLimit || left > kOutputLimit ||
+      right < -kOutputLimit || right > kOutputLimit ||
+      upDown < -kOutputLimit || upDown > kOutputLimit ||
+      leftRight < -kOutputLimit || leftRight > kOutputLimit ||
+      rawUpDown < -9999 || rawUpDown > 9999 ||
+      rawLeftRight < -9999 || rawLeftRight > 9999) {
+    return false;
+  }
+
+  char commandText[5];
+  if (!commandBits(command, commandText)) {
+    return false;
+  }
+
+  char payload[53];
+  const int payloadLength =
+      snprintf(payload, sizeof(payload),
+               "XD,%s,%+05d,%+05d,%+05d,%+05d,%+05d,%+05d,%02X,%04u",
+               commandText, static_cast<int>(left), static_cast<int>(right),
+               static_cast<int>(upDown), static_cast<int>(leftRight),
+               static_cast<int>(rawUpDown), static_cast<int>(rawLeftRight),
+               static_cast<unsigned>(flags), static_cast<unsigned>(sequence_));
+  if (payloadLength <= 0 || static_cast<size_t>(payloadLength) >= sizeof(payload)) {
+    return false;
+  }
+
+  const uint8_t crc = xorCrc(payload, static_cast<size_t>(payloadLength));
+  const int frameLength =
+      snprintf(output, outputCapacity, "$%s,%02X\r\n", payload, crc);
+  if (frameLength <= 0 || static_cast<size_t>(frameLength) >= outputCapacity) {
+    output[0] = '\0';
+    return false;
+  }
+
+  if (usedSequence != nullptr) {
+    *usedSequence = sequence_;
+  }
+  sequence_ = static_cast<uint16_t>((sequence_ + 1U) % 10000U);
+  return true;
+}
+
 }  // namespace xboxcar

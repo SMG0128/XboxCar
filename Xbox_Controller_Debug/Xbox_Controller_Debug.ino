@@ -53,7 +53,26 @@ bool sendFrame(DriveCommand command, int16_t left, int16_t right) {
   }
 
   char frame[Stm32Protocol::kFrameBufferSize];
-  if (!protocol.buildFrame(command, left, right, frame, sizeof(frame))) {
+  uint8_t flags = 0;
+  if (xboxInput.connected) {
+    flags |= 0x01U;
+  }
+  if (xboxInput.hasSample) {
+    flags |= 0x02U;
+  }
+  if (emergencyStop) {
+    flags |= 0x04U;
+  }
+  if (controlError) {
+    flags |= 0x08U;
+  }
+
+  // v2 carries the same mixed wheel values plus the operator axes and raw
+  // stick samples, so STM32, OLED and logs can consume one lossless snapshot.
+  if (!protocol.buildFrameV2(command, left, right, mixResult.target.throttle,
+                             mixResult.target.steering,
+                             -xboxInput.leftY, xboxInput.rightX, flags, frame,
+                             sizeof(frame))) {
     controlError = true;
     return false;
   }
