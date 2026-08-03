@@ -1,0 +1,27 @@
+{
+  "folders": [
+    {
+      "name": "XboxCar STM32 firmware",
+      "path": "XboxCar_STM32_Display"
+    }
+  ],
+  "settings": {
+    "cmake.sourceDirectory": "${workspaceFolder}/XboxCar_STM32_Display",
+    "cmake.buildDirectory": "${workspaceFolder}/XboxCar_STM32_Display/build/${buildType}",
+    "cmake.generator": "Ninja",
+    "cmake.configureSettings": {
+      "ARM_GCC_ROOT": "C:/ST/STM32CubeCLT_1.22.0/GNU-tools-for-STM32/bin"
+    },
+    "C_Cpp.default.compilerPath": "C:/ST/STM32CubeCLT_1.22.0/GNU-tools-for-STM32/bin/arm-none-eabi-gcc.exe",
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/XboxCar_STM32_Display/build/Debug/compile_commands.json",
+    "C_Cpp.default.includePath": [
+      "${workspaceFolder}/XboxCar_STM32_Display/App/Inc",
+      "${workspaceFolder}/XboxCar_STM32_Display/Board/Inc",
+      "${workspaceFolder}/XboxCar_STM32_Display/Core/Inc",
+      "${workspaceFolder}/XboxCar_STM32_Display/Drivers/STM32F1xx_HAL_Driver/Inc",
+      "${workspaceFolder}/XboxCar_STM32_Display/Drivers/STM32F1xx_HAL_Driver/Inc/Legacy",
+      "${workspaceFolder}/XboxCar_STM32_Display/Drivers/CMSIS/Device/ST/STM32F1xx/Include",
+      "${workspaceFolder}/XboxCar_STM32_Display/Drivers/CMSIS/Include"
+    ]
+  }
+}
