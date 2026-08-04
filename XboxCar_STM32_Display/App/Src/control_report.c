@@ -39,6 +39,27 @@ bool ControlReport_HasXbox(const AppDebugState *state)
   return (state != NULL) && (state->xbox_connected != 0U);
 }
 
+void ControlReport_GetActualAxes(const AppDebugState *state, int16_t *up_down,
+                                 int16_t *left_right)
+{
+  int32_t left = 0;
+  int32_t right = 0;
+
+  if (state != NULL)
+  {
+    left = state->actual_left;
+    right = state->actual_right;
+  }
+  if (up_down != NULL)
+  {
+    *up_down = (int16_t)((left + right) / 2);
+  }
+  if (left_right != NULL)
+  {
+    *left_right = (int16_t)((left - right) / 2);
+  }
+}
+
 /* Shared by both axes: a five character label, a colon, three digits. */
 static void FormatAxis(char *out, uint16_t size, const char *label,
                        int16_t value)
@@ -104,6 +125,9 @@ bool ControlReport_BuildDisplayLines(const AppDebugState *state, char *line1,
                                      uint16_t line1_size, char *line2,
                                      uint16_t line2_size)
 {
+  int16_t actual_up_down;
+  int16_t actual_left_right;
+
   if (line1 == NULL || line2 == NULL || line1_size == 0U || line2_size == 0U)
   {
     return false;
@@ -116,8 +140,9 @@ bool ControlReport_BuildDisplayLines(const AppDebugState *state, char *line1,
     return false;
   }
 
-  ControlReport_FormatUpDown(line1, line1_size, state->up_down_speed);
-  ControlReport_FormatLeftRight(line2, line2_size, state->left_right_speed);
+  ControlReport_GetActualAxes(state, &actual_up_down, &actual_left_right);
+  ControlReport_FormatUpDown(line1, line1_size, actual_up_down);
+  ControlReport_FormatLeftRight(line2, line2_size, actual_left_right);
   return true;
 }
 

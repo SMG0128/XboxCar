@@ -26,12 +26,12 @@
 /* ------------------------------------------------------------------------- */
 
 /*
- * Ultrasonic sensing stays OFF until every HC-SR04 ECHO line has a divider or
- * level shifter fitted. The PCB routes ECHO straight into the MCU, and HC-SR04
- * drives ECHO at 5 V. See config/PCB_HARDWARE_WARNINGS.md.
+ * Three HC-SR04 channels are enabled. The PB0/PB1 channel is excluded below
+ * because PB1 is not a 5 V-tolerant input on STM32F103x8/xB. The enabled ECHO
+ * pins must remain configured without internal pulls.
  */
 #ifndef APP_FEATURE_ULTRASONIC
-#define APP_FEATURE_ULTRASONIC 0
+#define APP_FEATURE_ULTRASONIC 1
 #endif
 
 /*
@@ -152,6 +152,12 @@
 /* ------------------------------------------------------------------------- */
 
 #define ULTRASONIC_COUNT 4U
+
+/*
+ * Bit order follows UltrasonicIndex: FRONT, REAR, LEFT, RIGHT. Keep LEFT
+ * disabled so the PB0/PB1 header is never configured or polled.
+ */
+#define ULTRASONIC_ENABLED_MASK 0x0BU
 
 /* Trigger pulse width demanded by HC-SR04. */
 #define ULTRASONIC_TRIGGER_US 12U
@@ -303,6 +309,10 @@
 
 _Static_assert(MOTOR_COUNT == 4U, "four fixed motors are assumed throughout");
 _Static_assert(ULTRASONIC_COUNT == 4U, "four ultrasonic positions are assumed");
+_Static_assert(ULTRASONIC_ENABLED_MASK != 0U,
+               "at least one ultrasonic channel must be enabled");
+_Static_assert((ULTRASONIC_ENABLED_MASK & ~((1U << ULTRASONIC_COUNT) - 1U)) == 0U,
+               "ultrasonic enabled mask contains an unknown channel");
 
 _Static_assert(SOFT_PWM_RESOLUTION > 0U, "PWM resolution must be non-zero");
 _Static_assert(SOFT_PWM_RESOLUTION <= 1000U, "PWM resolution beyond the ISR budget");

@@ -60,10 +60,13 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
 )
 
 option(XBOXCAR_ENABLE_ULTRASONIC
-    "Enable four HC-SR04 inputs after fitting 3.3 V level shifting" OFF)
+    "Enable the configured HC-SR04 input channels" ON)
 if(XBOXCAR_ENABLE_ULTRASONIC)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
         APP_FEATURE_ULTRASONIC=1)
+else()
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
+        APP_FEATURE_ULTRASONIC=0)
 endif()
 
 # Remove a spurious libob.a dependency when C++ files are enabled.

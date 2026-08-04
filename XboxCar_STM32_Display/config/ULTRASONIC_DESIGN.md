@@ -1,9 +1,10 @@
-# 四路超声波设计
+# 三路启用的超声波设计
 
 ## 默认状态与顺序
 
-`APP_FEATURE_ULTRASONIC=0`。HC-SR04 ECHO 可能输出 5 V，四路输入完成分压或电平
-转换前不得启用。启用后按 FRONT、REAR、LEFT、RIGHT 轮询，任何时刻只触发一路。
+`APP_FEATURE_ULTRASONIC=1`，`ULTRASONIC_ENABLED_MASK=0x0B`。固件按 FRONT、REAR、
+RIGHT 轮询，任何时刻只触发一路。LEFT 对应 PB0/PB1；由于 PB1 不是 5 V 容忍
+输入，该通道不初始化、不触发也不读取。
 
 状态机：
 

@@ -59,7 +59,8 @@ for token in (
 
 config = read("App/Inc/app_config.h")
 for pattern, description in (
-    (r"#define APP_FEATURE_ULTRASONIC 0\b", "ultrasonic default-off switch"),
+    (r"#define APP_FEATURE_ULTRASONIC 1\b", "ultrasonic enabled switch"),
+    (r"#define ULTRASONIC_ENABLED_MASK 0x0BU\b", "three-channel ultrasonic mask"),
     (r"#define APP_SYSCLK_HZ 8000000UL\b", "8 MHz application clock"),
     (r"#define SOFT_PWM_RESOLUTION 100U\b", "100-step PWM"),
     (r"#define SOFT_PWM_FREQUENCY_HZ 200U\b", "200 Hz PWM carrier"),

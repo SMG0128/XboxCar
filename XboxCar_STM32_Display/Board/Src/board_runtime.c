@@ -363,7 +363,8 @@ static uint32_t GetMicros(void)
 
 static void SetTrigger(uint8_t sensor, bool level)
 {
-  if (sensor < ULTRASONIC_COUNT)
+  if (sensor < ULTRASONIC_COUNT &&
+      (ULTRASONIC_ENABLED_MASK & (1UL << sensor)) != 0U)
   {
     WritePin(kUltrasonicTrigger[sensor], level);
   }
@@ -373,7 +374,8 @@ static bool ReadEcho(uint8_t sensor)
 {
   const BoardGpio *pin;
 
-  if (sensor >= ULTRASONIC_COUNT)
+  if (sensor >= ULTRASONIC_COUNT ||
+      (ULTRASONIC_ENABLED_MASK & (1UL << sensor)) == 0U)
   {
     return false;
   }
@@ -393,6 +395,10 @@ static void ConfigureUltrasonic(void)
   for (index = 0U; index < ULTRASONIC_COUNT; ++index)
   {
     const BoardGpio *trigger = &kBoardPins[kUltrasonicTrigger[index]];
+    if ((ULTRASONIC_ENABLED_MASK & (1UL << index)) == 0U)
+    {
+      continue;
+    }
     WritePin(kUltrasonicTrigger[index], false);
     gpio.Pin = trigger->pin;
     HAL_GPIO_Init(trigger->port, &gpio);
@@ -402,6 +408,10 @@ static void ConfigureUltrasonic(void)
   for (index = 0U; index < ULTRASONIC_COUNT; ++index)
   {
     const BoardGpio *echo = &kBoardPins[kUltrasonicEcho[index]];
+    if ((ULTRASONIC_ENABLED_MASK & (1UL << index)) == 0U)
+    {
+      continue;
+    }
     gpio.Pin = echo->pin;
     HAL_GPIO_Init(echo->port, &gpio);
   }
@@ -444,8 +454,10 @@ static void UpdateDisplay(uint32_t now_ms)
 {
   const AppDebugState *debug = ControlSystem_GetDebugState(&g_control);
   const bool has_xbox = ControlReport_HasXbox(debug);
-  const int16_t up_down = (debug != NULL) ? debug->up_down_speed : 0;
-  const int16_t left_right = (debug != NULL) ? debug->left_right_speed : 0;
+  int16_t up_down;
+  int16_t left_right;
+
+  ControlReport_GetActualAxes(debug, &up_down, &left_right);
 
   if (!g_display_ready)
   {

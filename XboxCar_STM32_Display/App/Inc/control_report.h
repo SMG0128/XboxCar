@@ -93,6 +93,13 @@ uint16_t ControlReport_SpeedToPercent(int16_t speed);
 bool ControlReport_HasXbox(const AppDebugState *state);
 
 /*
+ * Decomposes the post-limiter, post-ramp wheel speeds into the two axes shown
+ * on the OLED. These are actual commanded motor speeds, not Xbox requests.
+ */
+void ControlReport_GetActualAxes(const AppDebugState *state, int16_t *up_down,
+                                 int16_t *left_right);
+
+/*
  * Fixed width "UP   :072" / "DOWN :048" / "UP/DN:000" for the forward axis, and
  * "LEFT :035" / "RIGHT:021" / "LT/RT:000" for the steering axis.
  *
@@ -104,9 +111,10 @@ void ControlReport_FormatUpDown(char *out, uint16_t size, int16_t up_down);
 void ControlReport_FormatLeftRight(char *out, uint16_t size, int16_t left_right);
 
 /*
- * Both display lines for the current snapshot. Returns false when there is no
- * usable input, in which case the caller shows CONTROL_REPORT_NO_XBOX_TEXT and
- * the line buffers are set to empty strings.
+ * Both display lines for the current snapshot, derived from the actual motor
+ * speeds after ultrasonic limiting and acceleration/deceleration ramping.
+ * Returns false when there is no usable input, in which case the caller shows
+ * CONTROL_REPORT_NO_XBOX_TEXT and the line buffers are set to empty strings.
  */
 bool ControlReport_BuildDisplayLines(const AppDebugState *state, char *line1,
                                      uint16_t line1_size, char *line2,

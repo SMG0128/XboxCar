@@ -12,6 +12,42 @@ static uint32_t ElapsedUs(uint32_t now, uint32_t since)
   return now - since;
 }
 
+static bool SensorIsEnabled(uint8_t sensor)
+{
+  return sensor < ULTRASONIC_COUNT &&
+         (ULTRASONIC_ENABLED_MASK & (1UL << sensor)) != 0U;
+}
+
+static uint8_t FirstEnabledSensor(void)
+{
+  uint8_t sensor;
+
+  for (sensor = 0U; sensor < ULTRASONIC_COUNT; ++sensor)
+  {
+    if (SensorIsEnabled(sensor))
+    {
+      return sensor;
+    }
+  }
+  return 0U;
+}
+
+static uint8_t NextEnabledSensor(uint8_t current)
+{
+  uint8_t offset;
+
+  for (offset = 1U; offset <= ULTRASONIC_COUNT; ++offset)
+  {
+    uint8_t candidate =
+        (uint8_t)(((uint32_t)current + offset) % ULTRASONIC_COUNT);
+    if (SensorIsEnabled(candidate))
+    {
+      return candidate;
+    }
+  }
+  return FirstEnabledSensor();
+}
+
 uint16_t Ultrasonic_PulseToMillimetres(uint32_t pulse_us)
 {
   uint32_t millimetres;
@@ -143,6 +179,7 @@ void Ultrasonic_Init(Ultrasonic *ultrasonic, const UltrasonicHal *hal)
 
   memset(ultrasonic, 0, sizeof(*ultrasonic));
   ultrasonic->state = ULTRASONIC_STATE_IDLE;
+  ultrasonic->active = FirstEnabledSensor();
 
   if (hal == NULL || hal->get_micros == NULL || hal->set_trigger == NULL ||
       hal->read_echo == NULL)
@@ -192,7 +229,7 @@ bool Ultrasonic_IsEnabled(const Ultrasonic *ultrasonic)
 /* Moves to the next sensor in the round robin and re-arms. */
 static void AdvanceSensor(Ultrasonic *ultrasonic, uint32_t now)
 {
-  ultrasonic->active = (uint8_t)((ultrasonic->active + 1U) % ULTRASONIC_COUNT);
+  ultrasonic->active = NextEnabledSensor(ultrasonic->active);
   ultrasonic->state = ULTRASONIC_STATE_IDLE;
   ultrasonic->state_entry_us = now;
 }
@@ -211,10 +248,10 @@ void Ultrasonic_Update(Ultrasonic *ultrasonic)
 
   now = ultrasonic->hal.get_micros();
   active = ultrasonic->active;
-  if (active >= ULTRASONIC_COUNT)
+  if (!SensorIsEnabled(active))
   {
-    /* Defensive: corrupted index must not index out of bounds. */
-    ultrasonic->active = 0U;
+    /* Defensive: corrupted or disabled index must never touch a GPIO. */
+    ultrasonic->active = FirstEnabledSensor();
     ultrasonic->state = ULTRASONIC_STATE_IDLE;
     return;
   }
@@ -309,7 +346,7 @@ void Ultrasonic_Update(Ultrasonic *ultrasonic)
 
 uint16_t Ultrasonic_GetDistance(const Ultrasonic *ultrasonic, uint8_t sensor)
 {
-  if (ultrasonic == NULL || sensor >= ULTRASONIC_COUNT ||
+  if (ultrasonic == NULL || !SensorIsEnabled(sensor) ||
       !ultrasonic->enabled || !ultrasonic->sensor[sensor].valid)
   {
     return 0U;
@@ -319,7 +356,7 @@ uint16_t Ultrasonic_GetDistance(const Ultrasonic *ultrasonic, uint8_t sensor)
 
 uint16_t Ultrasonic_GetRawDistance(const Ultrasonic *ultrasonic, uint8_t sensor)
 {
-  if (ultrasonic == NULL || sensor >= ULTRASONIC_COUNT || !ultrasonic->enabled)
+  if (ultrasonic == NULL || !SensorIsEnabled(sensor) || !ultrasonic->enabled)
   {
     return 0U;
   }
@@ -338,7 +375,8 @@ uint8_t Ultrasonic_GetValidMask(const Ultrasonic *ultrasonic)
 
   for (index = 0U; index < ULTRASONIC_COUNT; ++index)
   {
-    if (ultrasonic->sensor[index].valid && !ultrasonic->sensor[index].faulted)
+    if (SensorIsEnabled(index) && ultrasonic->sensor[index].valid &&
+        !ultrasonic->sensor[index].faulted)
     {
       mask |= (uint8_t)(1U << index);
     }
@@ -363,7 +401,7 @@ uint8_t Ultrasonic_GetFaultMask(const Ultrasonic *ultrasonic)
 
   for (index = 0U; index < ULTRASONIC_COUNT; ++index)
   {
-    if (ultrasonic->sensor[index].faulted)
+    if (SensorIsEnabled(index) && ultrasonic->sensor[index].faulted)
     {
       mask |= (uint8_t)(1U << index);
     }
@@ -373,7 +411,7 @@ uint8_t Ultrasonic_GetFaultMask(const Ultrasonic *ultrasonic)
 
 uint32_t Ultrasonic_GetTimeoutCount(const Ultrasonic *ultrasonic, uint8_t sensor)
 {
-  if (ultrasonic == NULL || sensor >= ULTRASONIC_COUNT)
+  if (ultrasonic == NULL || !SensorIsEnabled(sensor))
   {
     return 0U;
   }

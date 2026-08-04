@@ -6,7 +6,9 @@ extern "C" {
 #endif
 
 /*
- * Four HC-SR04 ultrasonic rangefinders, polled one at a time.
+ * Up to four HC-SR04 ultrasonic rangefinders, with the configured channels
+ * polled one at a time. ULTRASONIC_ENABLED_MASK excludes unsafe or absent
+ * channels from both GPIO access and the round robin.
  *
  * The module is a non-blocking state machine driven by repeated Update calls.
  * It never spins, never delays and never touches a peripheral directly: the
@@ -17,9 +19,9 @@ extern "C" {
  * Only one sensor is ever active. Firing them together would let one burst be
  * heard by another sensor's receiver and produce a confident wrong reading.
  *
- * DISABLED BY DEFAULT. HC-SR04 drives ECHO at 5 V and the PCB routes it
- * straight into the MCU, so APP_FEATURE_ULTRASONIC stays 0 until a divider or
- * level shifter is fitted on each of the four ECHO lines.
+ * The PB0/PB1 channel is disabled because PB1 is not 5 V tolerant. Enabled
+ * ECHO pins must be verified as FT for the fitted MCU and used without internal
+ * pull-up or pull-down resistors.
  */
 
 #include <stdbool.h>

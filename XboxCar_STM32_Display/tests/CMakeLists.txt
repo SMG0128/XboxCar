@@ -50,8 +50,7 @@ target_include_directories(xboxcar_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-# Exercise the obstacle chain on the host even though unsafe 5 V ECHO inputs
-# keep the feature disabled in the default firmware image.
+# Exercise the enabled three-channel obstacle chain on the host.
 target_compile_definitions(xboxcar_tests PRIVATE APP_FEATURE_ULTRASONIC=1)
 
 if(MSVC)

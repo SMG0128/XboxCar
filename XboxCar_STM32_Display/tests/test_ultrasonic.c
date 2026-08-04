@@ -43,6 +43,27 @@ static bool MockReadEcho(uint8_t sensor)
 
 static const UltrasonicHal kMockHal = {MockMicros, MockSetTrigger, MockReadEcho};
 
+static bool SensorIsEnabled(uint8_t sensor)
+{
+  return sensor < ULTRASONIC_COUNT &&
+         (ULTRASONIC_ENABLED_MASK & (1UL << sensor)) != 0U;
+}
+
+static uint8_t EnabledSensorCount(void)
+{
+  uint8_t sensor;
+  uint8_t count = 0U;
+
+  for (sensor = 0U; sensor < ULTRASONIC_COUNT; ++sensor)
+  {
+    if (SensorIsEnabled(sensor))
+    {
+      ++count;
+    }
+  }
+  return count;
+}
+
 static void MockReset(uint32_t start_micros)
 {
   g_micros = start_micros;
@@ -230,14 +251,14 @@ static void TestRoundRobinVisitsEverySensor(void)
   uint8_t index;
   bool seen[ULTRASONIC_COUNT];
 
-  TEST_CASE("polling visits all four sensors in turn");
+  TEST_CASE("polling visits only the configured sensors in turn");
 
   MockReset(0U);
   Ultrasonic_Init(&ultrasonic, &kMockHal);
   Ultrasonic_SetEnabled(&ultrasonic, true);
   memset(seen, 0, sizeof(seen));
 
-  for (index = 0U; index < ULTRASONIC_COUNT; ++index)
+  for (index = 0U; index < EnabledSensorCount(); ++index)
   {
     uint8_t sensor = RunMeasurement(&ultrasonic, PulseForMillimetres(500));
     seen[sensor] = true;
@@ -245,10 +266,10 @@ static void TestRoundRobinVisitsEverySensor(void)
 
   for (index = 0U; index < ULTRASONIC_COUNT; ++index)
   {
-    TEST_CHECK(seen[index]);
-    TEST_CHECK(g_trigger_rising_count[index] >= 1U);
+    TEST_EQ(seen[index], SensorIsEnabled(index));
+    TEST_EQ(g_trigger_rising_count[index] >= 1U, SensorIsEnabled(index));
   }
-  TEST_EQ(Ultrasonic_GetValidMask(&ultrasonic), 0x0F);
+  TEST_EQ(Ultrasonic_GetValidMask(&ultrasonic), ULTRASONIC_ENABLED_MASK);
 }
 
 static void TestOneDeadSensorDoesNotBlockOthers(void)
@@ -281,10 +302,10 @@ static void TestOneDeadSensorDoesNotBlockOthers(void)
     }
   }
 
-  TEST_CHECK(good_readings >= ULTRASONIC_COUNT - 1U);
+  TEST_CHECK(good_readings >= EnabledSensorCount() - 1U);
   for (index = 0U; index < ULTRASONIC_COUNT; ++index)
   {
-    if (index != dead)
+    if (index != dead && SensorIsEnabled(index))
     {
       TEST_CHECK(Ultrasonic_GetDistance(&ultrasonic, index) > 0U);
     }
@@ -348,7 +369,8 @@ static void TestMedianRejectsSingleOutlier(void)
   target = Ultrasonic_GetActiveSensor(&ultrasonic);
 
   /* Fill the window with a steady distance. */
-  for (round = 0U; round < ULTRASONIC_MEDIAN_WINDOW * ULTRASONIC_COUNT; ++round)
+  for (round = 0U;
+       round < ULTRASONIC_MEDIAN_WINDOW * EnabledSensorCount(); ++round)
   {
     uint8_t sensor = Ultrasonic_GetActiveSensor(&ultrasonic);
     (void)RunMeasurement(&ultrasonic,
@@ -358,7 +380,7 @@ static void TestMedianRejectsSingleOutlier(void)
   TEST_IN_RANGE(filtered, 590, 610);
 
   /* One wild reading on the target sensor. */
-  for (round = 0U; round < ULTRASONIC_COUNT; ++round)
+  for (round = 0U; round < EnabledSensorCount(); ++round)
   {
     uint8_t sensor = Ultrasonic_GetActiveSensor(&ultrasonic);
     (void)RunMeasurement(&ultrasonic,

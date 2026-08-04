@@ -36,8 +36,18 @@ static void TestDisplayLinesUseFixedWidthAxes(void)
   TEST_CHECK(strcmp(line2, "LT/RT:000") == 0);
 
   state.xbox_connected = 1U;
+  state.actual_left = -270;
+  state.actual_right = -690;
   state.up_down_speed = -480;
   state.left_right_speed = 210;
+  TEST_CHECK(ControlReport_BuildDisplayLines(
+      &state, line1, sizeof(line1), line2, sizeof(line2)));
+  TEST_CHECK(strcmp(line1, "DOWN :048") == 0);
+  TEST_CHECK(strcmp(line2, "RIGHT:021") == 0);
+
+  /* OLED follows the post-ramp motor pair, not a changed Xbox request. */
+  state.up_down_speed = 900;
+  state.left_right_speed = -800;
   TEST_CHECK(ControlReport_BuildDisplayLines(
       &state, line1, sizeof(line1), line2, sizeof(line2)));
   TEST_CHECK(strcmp(line1, "DOWN :048") == 0);
