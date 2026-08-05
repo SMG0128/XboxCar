@@ -3,7 +3,7 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$project = Join-Path $root 'XboxCar_STM32_Display'
+$project = $root
 $testsSource = Join-Path $project 'tests'
 $testsBuild = Join-Path $project 'build\tests'
 $cmake = (Get-Command cmake -ErrorAction Stop).Source

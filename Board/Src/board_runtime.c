@@ -1,7 +1,9 @@
 #include "board_runtime.h"
 
 #include "app_config.h"
+#include "control_report.h"
 #include "control_system.h"
+#include "debug_log.h"
 #include "ssd1306_simple.h"
 #include "ultrasonic.h"
 
@@ -23,6 +25,24 @@ typedef struct {
 static const BoardGpio kBoardPins[BOARD_PIN_ID_COUNT] = {
 #define BOARD_PIN(name, port, number)                                         \
   [BOARD_PIN_ID_##name] = {GPIO##port, GPIO_PIN_##number},
+#include "board_pins.h"
+#undef BOARD_PIN
+};
+
+/*
+ * The same pin list again, as printable port letter and pin number. Generating
+ * both tables from one X-macro list is what guarantees the pin named in a log
+ * line is the pin the ISR is actually toggling; a hand-maintained string table
+ * would be free to drift the moment a pin moved.
+ */
+static const char kBoardPinPort[BOARD_PIN_ID_COUNT] = {
+#define BOARD_PIN(name, port, number) [BOARD_PIN_ID_##name] = #port[0],
+#include "board_pins.h"
+#undef BOARD_PIN
+};
+
+static const uint8_t kBoardPinNumber[BOARD_PIN_ID_COUNT] = {
+#define BOARD_PIN(name, port, number) [BOARD_PIN_ID_##name] = (uint8_t)(number),
 #include "board_pins.h"
 #undef BOARD_PIN
 };
@@ -76,6 +96,11 @@ static volatile uint16_t g_pwm_duty[MOTOR_COUNT];
 static volatile uint16_t g_pwm_phase;
 
 static uint32_t g_last_control_ms;
+static ControlReporter g_reporter;
+static PwmChannelInfo g_pwm_report_map[MOTOR_COUNT];
+
+static const char *const kMotorWheelNames[MOTOR_COUNT] = {
+    "FL", "RL", "FR", "RR"};
 
 #if APP_FEATURE_DISPLAY
 static bool g_display_ready;
@@ -83,10 +108,56 @@ static bool g_display_pending;
 static uint8_t g_display_page;
 static uint8_t g_display_failures;
 static uint32_t g_last_display_flush_ms;
-static bool g_rendered_online;
-static int16_t g_rendered_left;
-static int16_t g_rendered_right;
+static bool g_rendered_xbox;
+static int16_t g_rendered_up_down;
+static int16_t g_rendered_left_right;
 #endif
+
+static void InitializePwmReportMap(void)
+{
+  uint8_t index;
+
+  for (index = 0U; index < MOTOR_COUNT; ++index)
+  {
+    const MotorPins *motor = &kMotorPins[index];
+
+    g_pwm_report_map[index] = (PwmChannelInfo){
+        kMotorWheelNames[index],
+        "TIM4_SOFTPWM",
+        (index == 0U) ? "SOFT_CH1"
+        : (index == 1U) ? "SOFT_CH2"
+        : (index == 2U) ? "SOFT_CH3"
+                        : "SOFT_CH4",
+        kBoardPinPort[motor->pwm],
+        kBoardPinNumber[motor->pwm],
+        kBoardPinPort[motor->in1],
+        kBoardPinNumber[motor->in1],
+        kBoardPinPort[motor->in2],
+        kBoardPinNumber[motor->in2]};
+  }
+}
+
+static void DrainDebugLog(void)
+{
+  uint8_t byte;
+  uint16_t count = 0U;
+
+  if (g_control_uart == NULL || g_control_uart->Instance == NULL)
+  {
+    return;
+  }
+
+  while (count < DEBUG_LOG_BYTES_PER_PASS &&
+         (g_control_uart->Instance->SR & USART_SR_TXE) != 0U)
+  {
+    if (!DebugLog_PopByte(&byte))
+    {
+      break;
+    }
+    g_control_uart->Instance->DR = byte;
+    ++count;
+  }
+}
 
 #if APP_FEATURE_ULTRASONIC
 static uint32_t g_micros;
@@ -292,7 +363,8 @@ static uint32_t GetMicros(void)
 
 static void SetTrigger(uint8_t sensor, bool level)
 {
-  if (sensor < ULTRASONIC_COUNT)
+  if (sensor < ULTRASONIC_COUNT &&
+      (ULTRASONIC_ENABLED_MASK & (1UL << sensor)) != 0U)
   {
     WritePin(kUltrasonicTrigger[sensor], level);
   }
@@ -302,7 +374,8 @@ static bool ReadEcho(uint8_t sensor)
 {
   const BoardGpio *pin;
 
-  if (sensor >= ULTRASONIC_COUNT)
+  if (sensor >= ULTRASONIC_COUNT ||
+      (ULTRASONIC_ENABLED_MASK & (1UL << sensor)) == 0U)
   {
     return false;
   }
@@ -322,6 +395,10 @@ static void ConfigureUltrasonic(void)
   for (index = 0U; index < ULTRASONIC_COUNT; ++index)
   {
     const BoardGpio *trigger = &kBoardPins[kUltrasonicTrigger[index]];
+    if ((ULTRASONIC_ENABLED_MASK & (1UL << index)) == 0U)
+    {
+      continue;
+    }
     WritePin(kUltrasonicTrigger[index], false);
     gpio.Pin = trigger->pin;
     HAL_GPIO_Init(trigger->port, &gpio);
@@ -331,6 +408,10 @@ static void ConfigureUltrasonic(void)
   for (index = 0U; index < ULTRASONIC_COUNT; ++index)
   {
     const BoardGpio *echo = &kBoardPins[kUltrasonicEcho[index]];
+    if ((ULTRASONIC_ENABLED_MASK & (1UL << index)) == 0U)
+    {
+      continue;
+    }
     gpio.Pin = echo->pin;
     HAL_GPIO_Init(echo->port, &gpio);
   }
@@ -372,10 +453,11 @@ static void BuildSensorSnapshot(SensorSnapshot *snapshot)
 static void UpdateDisplay(uint32_t now_ms)
 {
   const AppDebugState *debug = ControlSystem_GetDebugState(&g_control);
-  const bool online = debug != NULL && debug->communication_online != 0U &&
-                      debug->last_command != (uint8_t)XBOX_CMD_DISCONNECTED;
-  const int16_t left = (debug != NULL) ? debug->actual_left : 0;
-  const int16_t right = (debug != NULL) ? debug->actual_right : 0;
+  const bool has_xbox = ControlReport_HasXbox(debug);
+  int16_t up_down;
+  int16_t left_right;
+
+  ControlReport_GetActualAxes(debug, &up_down, &left_right);
 
   if (!g_display_ready)
   {
@@ -383,17 +465,24 @@ static void UpdateDisplay(uint32_t now_ms)
   }
 
   if (!g_display_pending &&
-      (online != g_rendered_online || left != g_rendered_left ||
-       right != g_rendered_right))
+      (has_xbox != g_rendered_xbox || up_down != g_rendered_up_down ||
+       left_right != g_rendered_left_right))
   {
-    if (!SSD1306_RenderControl(online, left, right))
+    char line1[CONTROL_REPORT_LINE_MAX];
+    char line2[CONTROL_REPORT_LINE_MAX];
+    const bool rendered =
+        ControlReport_BuildDisplayLines(debug, line1, sizeof(line1), line2,
+                                        sizeof(line2))
+            ? SSD1306_RenderLines(line1, line2)
+            : SSD1306_RenderNoXbox();
+    if (!rendered)
     {
       g_display_ready = false;
       return;
     }
-    g_rendered_online = online;
-    g_rendered_left = left;
-    g_rendered_right = right;
+    g_rendered_xbox = has_xbox;
+    g_rendered_up_down = up_down;
+    g_rendered_left_right = left_right;
     g_display_page = 0U;
     g_display_pending = true;
   }
@@ -435,6 +524,10 @@ bool BoardRuntime_Init(UART_HandleTypeDef *control_uart,
   g_initialized = false;
   g_control_uart = control_uart;
   g_uart_fault_pending = false;
+  DebugLog_Init();
+  ControlReport_Init(&g_reporter);
+  InitializePwmReportMap();
+  ControlReport_SetPwmMap(g_pwm_report_map);
   ControlSystem_Init(&g_control);
 
   if (!ConfigureMotorHardware())
@@ -445,6 +538,9 @@ bool BoardRuntime_Init(UART_HandleTypeDef *control_uart,
     BoardRuntime_FaultStop();
     return false;
   }
+
+  ControlReport_LogBoot(APP_SYSCLK_HZ, SOFT_PWM_FREQUENCY_HZ,
+                        SOFT_PWM_ISR_HZ);
 
 #if APP_FEATURE_ULTRASONIC
   ConfigureUltrasonic();
@@ -459,11 +555,11 @@ bool BoardRuntime_Init(UART_HandleTypeDef *control_uart,
   {
     HAL_Delay(50U);
     g_display_ready = SSD1306_Init(display_i2c);
-    if (g_display_ready && SSD1306_RenderControl(false, 0, 0))
+    if (g_display_ready && SSD1306_RenderNoXbox())
     {
-      g_rendered_online = false;
-      g_rendered_left = 0;
-      g_rendered_right = 0;
+      g_rendered_xbox = false;
+      g_rendered_up_down = 0;
+      g_rendered_left_right = 0;
       g_display_page = 0U;
       g_display_pending = true;
       g_last_display_flush_ms = HAL_GetTick();
@@ -498,6 +594,8 @@ void BoardRuntime_Run(void)
     return;
   }
 
+  DrainDebugLog();
+
 #if APP_FEATURE_ULTRASONIC
   Ultrasonic_Update(&g_ultrasonic);
 #endif
@@ -516,12 +614,15 @@ void BoardRuntime_Run(void)
     g_last_control_ms = now_ms;
     BuildSensorSnapshot(&sensors);
     ControlSystem_Update(&g_control, now_ms, &sensors);
+    ControlReport_Update(&g_reporter, ControlSystem_GetDebugState(&g_control),
+                         now_ms);
     (void)ApplyMotorOutputs(now_ms);
   }
 
 #if APP_FEATURE_DISPLAY
   UpdateDisplay(now_ms);
 #endif
+  DrainDebugLog();
 }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *uart)

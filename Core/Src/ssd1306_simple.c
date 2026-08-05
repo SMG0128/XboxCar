@@ -1,17 +1,33 @@
 #include "ssd1306_simple.h"
 
-#include <stdio.h>
 #include <string.h>
 
 #define SSD1306_ADDRESS (0x3cU << 1U)
 #define SSD1306_WIDTH 128U
 #define SSD1306_HEIGHT 64U
 #define SSD1306_BUFFER_SIZE (SSD1306_WIDTH * SSD1306_HEIGHT / 8U)
-#define SSD1306_PAGE_COUNT 8U
 #define SSD1306_TIMEOUT_MS 20U
 
+/* Text origins, chosen so the two 14 px lines clear each other. */
+#define SSD1306_LINE1_X 4U
+#define SSD1306_LINE1_Y 7U
+#define SSD1306_LINE2_X 4U
+#define SSD1306_LINE2_Y 39U
+#define SSD1306_NO_XBOX_X 22U
+#define SSD1306_NO_XBOX_Y 24U
+
 static I2C_HandleTypeDef *display_i2c;
+
+/* What we want on the panel. */
 static uint8_t display_buffer[SSD1306_BUFFER_SIZE];
+
+/*
+ * What the panel is currently showing. The difference between the two is the
+ * only thing that ever gets transmitted, which is what makes a static screen
+ * free and a changed digit cheap.
+ */
+static uint8_t panel_buffer[SSD1306_BUFFER_SIZE];
+static uint8_t dirty_mask;
 
 static bool WriteCommands(const uint8_t *commands, uint16_t count)
 {
@@ -42,10 +58,16 @@ static bool FlushDisplay(void)
     return false;
   }
 
-  return HAL_I2C_Mem_Write(display_i2c, SSD1306_ADDRESS, 0x40U,
-                           I2C_MEMADD_SIZE_8BIT, display_buffer,
-                           sizeof(display_buffer),
-                           SSD1306_TIMEOUT_MS) == HAL_OK;
+  if (HAL_I2C_Mem_Write(display_i2c, SSD1306_ADDRESS, 0x40U,
+                        I2C_MEMADD_SIZE_8BIT, display_buffer,
+                        sizeof(display_buffer), SSD1306_TIMEOUT_MS) != HAL_OK)
+  {
+    return false;
+  }
+
+  memcpy(panel_buffer, display_buffer, sizeof(panel_buffer));
+  dirty_mask = 0U;
+  return true;
 }
 
 bool SSD1306_FlushPage(uint8_t page)
@@ -68,10 +90,68 @@ bool SSD1306_FlushPage(uint8_t page)
     return false;
   }
 
-  return HAL_I2C_Mem_Write(
-             display_i2c, SSD1306_ADDRESS, 0x40U, I2C_MEMADD_SIZE_8BIT,
-             &display_buffer[(uint16_t)page * SSD1306_WIDTH], SSD1306_WIDTH,
-             SSD1306_TIMEOUT_MS) == HAL_OK;
+  if (HAL_I2C_Mem_Write(display_i2c, SSD1306_ADDRESS, 0x40U,
+                        I2C_MEMADD_SIZE_8BIT,
+                        &display_buffer[(uint16_t)page * SSD1306_WIDTH],
+                        SSD1306_WIDTH, SSD1306_TIMEOUT_MS) != HAL_OK)
+  {
+    return false;
+  }
+
+  memcpy(&panel_buffer[(uint16_t)page * SSD1306_WIDTH],
+         &display_buffer[(uint16_t)page * SSD1306_WIDTH], SSD1306_WIDTH);
+  dirty_mask = (uint8_t)(dirty_mask & ~(uint8_t)(1U << page));
+  return true;
+}
+
+/* Recomputes the dirty set after a render. */
+static void MarkDirtyPages(void)
+{
+  uint8_t page;
+
+  dirty_mask = 0U;
+  for (page = 0U; page < SSD1306_PAGE_COUNT; ++page)
+  {
+    const uint16_t offset = (uint16_t)page * SSD1306_WIDTH;
+
+    if (memcmp(&panel_buffer[offset], &display_buffer[offset],
+               SSD1306_WIDTH) != 0)
+    {
+      dirty_mask = (uint8_t)(dirty_mask | (uint8_t)(1U << page));
+    }
+  }
+}
+
+uint8_t SSD1306_GetDirtyMask(void)
+{
+  return dirty_mask;
+}
+
+bool SSD1306_HasDirtyPages(void)
+{
+  return dirty_mask != 0U;
+}
+
+SSD1306FlushResult SSD1306_FlushDirtyPage(void)
+{
+  uint8_t page;
+
+  if (display_i2c == NULL)
+  {
+    return SSD1306_FLUSH_FAILED;
+  }
+
+  for (page = 0U; page < SSD1306_PAGE_COUNT; ++page)
+  {
+    if ((dirty_mask & (uint8_t)(1U << page)) == 0U)
+    {
+      continue;
+    }
+
+    return SSD1306_FlushPage(page) ? SSD1306_FLUSH_SENT : SSD1306_FLUSH_FAILED;
+  }
+
+  return SSD1306_FLUSH_IDLE;
 }
 
 static void SetPixel(uint8_t x, uint8_t y)
@@ -234,6 +314,13 @@ static void GetGlyph(char character, uint8_t glyph[5])
         source = data;
         break;
       }
+      case '/':
+      {
+        /* Needed by the centred "UP/DN" and "LT/RT" labels. */
+        static const uint8_t data[5] = {0x20U, 0x10U, 0x08U, 0x04U, 0x02U};
+        source = data;
+        break;
+      }
       default:
         break;
     }
@@ -270,19 +357,6 @@ static void DrawText2x(uint8_t x, uint8_t y, const char *text)
   }
 }
 
-static uint16_t AbsoluteSpeed(int32_t value)
-{
-  if (value < 0)
-  {
-    value = -value;
-  }
-  if (value > 1000)
-  {
-    value = 1000;
-  }
-  return (uint16_t)value;
-}
-
 bool SSD1306_Init(I2C_HandleTypeDef *i2c)
 {
   static const uint8_t initialization_commands[] = {
@@ -295,6 +369,14 @@ bool SSD1306_Init(I2C_HandleTypeDef *i2c)
   display_i2c = i2c;
   memset(display_buffer, 0, sizeof(display_buffer));
 
+  /*
+   * The panel's RAM is not cleared by the reset sequence, so the shadow starts
+   * deliberately different from the blank back buffer: the first flush must
+   * transmit every page rather than assume the panel is already blank.
+   */
+  memset(panel_buffer, 0xFFU, sizeof(panel_buffer));
+  dirty_mask = 0xFFU;
+
   if (!WriteCommands(initialization_commands,
                      sizeof(initialization_commands)))
   {
@@ -305,79 +387,34 @@ bool SSD1306_Init(I2C_HandleTypeDef *i2c)
   return FlushDisplay();
 }
 
-bool SSD1306_RenderControl(bool connected, int16_t left, int16_t right)
+bool SSD1306_RenderNoXbox(void)
 {
-  char vertical_text[12];
-  char horizontal_text[12];
-  int32_t vertical_speed;
-  int32_t horizontal_speed;
-
   if (display_i2c == NULL)
   {
     return false;
   }
 
   memset(display_buffer, 0, sizeof(display_buffer));
-
-  if (!connected)
-  {
-    DrawText2x(22U, 24U, "No Xbox");
-    return true;
-  }
-
-  vertical_speed = ((int32_t)left + (int32_t)right) / 2;
-  horizontal_speed = ((int32_t)left - (int32_t)right) / 2;
-
-  if (vertical_speed > 0)
-  {
-    (void)snprintf(vertical_text, sizeof(vertical_text), "UP:%04u",
-                   (unsigned)AbsoluteSpeed(vertical_speed));
-  }
-  else if (vertical_speed < 0)
-  {
-    (void)snprintf(vertical_text, sizeof(vertical_text), "DOWN:%04u",
-                   (unsigned)AbsoluteSpeed(vertical_speed));
-  }
-  else
-  {
-    (void)snprintf(vertical_text, sizeof(vertical_text), "STOP:%04u", 0U);
-  }
-
-  if (horizontal_speed > 0)
-  {
-    (void)snprintf(horizontal_text, sizeof(horizontal_text), "RIGHT:%04u",
-                   (unsigned)AbsoluteSpeed(horizontal_speed));
-  }
-  else if (horizontal_speed < 0)
-  {
-    (void)snprintf(horizontal_text, sizeof(horizontal_text), "LEFT:%04u",
-                   (unsigned)AbsoluteSpeed(horizontal_speed));
-  }
-  else
-  {
-    (void)snprintf(horizontal_text, sizeof(horizontal_text), "LR:%04u", 0U);
-  }
-
-  DrawText2x(4U, 7U, vertical_text);
-  DrawText2x(4U, 39U, horizontal_text);
+  DrawText2x(SSD1306_NO_XBOX_X, SSD1306_NO_XBOX_Y, "No Xbox");
+  MarkDirtyPages();
   return true;
 }
-
-bool SSD1306_ShowControl(bool connected, int16_t left, int16_t right)
+bool SSD1306_RenderLines(const char *line1, const char *line2)
 {
-  uint8_t page;
-
-  if (!SSD1306_RenderControl(connected, left, right))
+  if (display_i2c == NULL)
   {
     return false;
   }
 
-  for (page = 0U; page < SSD1306_PAGE_COUNT; ++page)
+  memset(display_buffer, 0, sizeof(display_buffer));
+  if (line1 != NULL)
   {
-    if (!SSD1306_FlushPage(page))
-    {
-      return false;
-    }
+    DrawText2x(SSD1306_LINE1_X, SSD1306_LINE1_Y, line1);
   }
+  if (line2 != NULL)
+  {
+    DrawText2x(SSD1306_LINE2_X, SSD1306_LINE2_Y, line2);
+  }
+  MarkDirtyPages();
   return true;
 }

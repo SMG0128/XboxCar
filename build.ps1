@@ -3,7 +3,7 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$project = Join-Path $root 'XboxCar_STM32_Display'
+$project = $root
 $configure = Join-Path $root 'configure.ps1'
 $toolchainBin = 'C:\ST\STM32CubeCLT_1.22.0\GNU-tools-for-STM32\bin'
 $cmake = (Get-Command cmake -ErrorAction Stop).Source

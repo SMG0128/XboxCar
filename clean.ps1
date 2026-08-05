@@ -3,7 +3,7 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$project = Join-Path $root 'XboxCar_STM32_Display'
+$project = $root
 $projectFull = (Resolve-Path -LiteralPath $project -ErrorAction Stop).Path.TrimEnd('\')
 $targets = @(
     (Join-Path $projectFull 'build\Debug'),

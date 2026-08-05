@@ -5,8 +5,10 @@
 /* Ring index mask. COMM_RX_RING_SIZE is asserted to be a power of two. */
 #define RING_MASK (COMM_RX_RING_SIZE - 1U)
 
-/* Commas sit at fixed offsets in a well formed frame. */
-static const uint8_t kCommaOffsets[] = {3U, 8U, 14U, 20U, 25U};
+/* Commas sit at fixed offsets in a well formed frame, one table per version. */
+static const uint8_t kCommaOffsetsV1[] = {3U, 8U, 14U, 20U, 25U};
+static const uint8_t kCommaOffsetsV2[] = {3U,  8U,  14U, 20U, 26U,
+                                          32U, 38U, 44U, 47U, 52U};
 
 uint8_t XboxProtocol_Crc(const uint8_t *data, uint16_t length)
 {
@@ -109,8 +111,12 @@ static bool ParseUnsigned4(const uint8_t *text, uint16_t *value)
   return true;
 }
 
-/* Signed five character field: a sign followed by four digits. */
-static bool ParseSigned5(const uint8_t *text, int16_t *value)
+/*
+ * Signed five character field: a sign followed by four digits. limit is the
+ * largest accepted magnitude, so a control field and a diagnostic-only raw
+ * field can share the parser without sharing a range rule.
+ */
+static bool ParseSigned5(const uint8_t *text, int16_t *value, int16_t limit)
 {
   uint16_t magnitude;
 
@@ -124,7 +130,7 @@ static bool ParseSigned5(const uint8_t *text, int16_t *value)
     return false;
   }
 
-  if (magnitude > (uint16_t)MOTOR_SPEED_MAX)
+  if (magnitude > (uint16_t)limit)
   {
     return false;
   }
@@ -203,28 +209,56 @@ static bool CommandIsKnown(uint8_t command)
 }
 
 /*
+ * Frame length implied by the format byte at index 2, or 0 when the byte does
+ * not name a format this build understands.
+ */
+static uint16_t FrameLengthForFormat(uint8_t format_byte)
+{
+  if (format_byte == (uint8_t)XBOX_FORMAT_V1_CHAR)
+  {
+    return XBOX_FRAME_V1_LENGTH;
+  }
+  if (format_byte == (uint8_t)XBOX_FORMAT_V2_CHAR)
+  {
+    return XBOX_FRAME_V2_LENGTH;
+  }
+  return 0U;
+}
+
+/*
  * Structural check. Separated from value parsing so that a framing fault and a
  * range fault land in different counters.
  */
-static bool CheckStructure(const uint8_t *frame)
+static bool CheckStructure(const uint8_t *frame, uint16_t length)
 {
+  const uint8_t *commas;
+  uint8_t comma_count;
   uint8_t index;
 
-  if (frame[0] != (uint8_t)'$' || frame[1] != (uint8_t)'X' ||
-      frame[2] != (uint8_t)'C')
+  if (frame[0] != (uint8_t)'$' || frame[1] != (uint8_t)'X')
   {
     return false;
   }
 
-  if (frame[XBOX_FRAME_LENGTH - 2U] != (uint8_t)'\r' ||
-      frame[XBOX_FRAME_LENGTH - 1U] != (uint8_t)'\n')
+  if (frame[length - 2U] != (uint8_t)'\r' || frame[length - 1U] != (uint8_t)'\n')
   {
     return false;
   }
 
-  for (index = 0U; index < (uint8_t)sizeof(kCommaOffsets); ++index)
+  if (length == XBOX_FRAME_V1_LENGTH)
   {
-    if (frame[kCommaOffsets[index]] != (uint8_t)',')
+    commas = kCommaOffsetsV1;
+    comma_count = (uint8_t)sizeof(kCommaOffsetsV1);
+  }
+  else
+  {
+    commas = kCommaOffsetsV2;
+    comma_count = (uint8_t)sizeof(kCommaOffsetsV2);
+  }
+
+  for (index = 0U; index < comma_count; ++index)
+  {
+    if (frame[commas[index]] != (uint8_t)',')
     {
       return false;
     }
@@ -314,68 +348,146 @@ static XboxPollResult ClassifySequence(XboxProtocol *protocol, uint16_t sequence
   protocol->have_resync_candidate = true;
   protocol->resync_candidate = sequence;
   ++protocol->stats.sequence_errors;
+  protocol->last_reject_reason = (uint8_t)XBOX_REJECT_SEQUENCE;
   return XBOX_POLL_ERROR;
 }
 
-/* Validates an assembled 30 byte candidate and, if it passes, fills frame. */
+/* Records a rejection reason alongside the counter the caller already bumped. */
+static XboxPollResult Reject(XboxProtocol *protocol, XboxRejectReason reason)
+{
+  protocol->last_reject_reason = (uint8_t)reason;
+  return XBOX_POLL_ERROR;
+}
+
+/* Validates an assembled candidate and, if it passes, fills frame. */
 static XboxPollResult ValidateFrame(XboxProtocol *protocol,
                                     XboxControlFrame *frame)
 {
   const uint8_t *raw = protocol->frame;
+  const uint16_t length = protocol->expected_length;
+  const bool is_v2 = (length == XBOX_FRAME_V2_LENGTH);
   XboxControlFrame parsed;
   uint8_t received_crc;
   uint8_t calculated_crc;
   uint16_t sequence;
+  uint16_t crc_first;
+  uint16_t crc_last;
+  uint16_t crc_offset;
+  uint16_t seq_offset;
   XboxPollResult sequence_result;
 
-  if (!CheckStructure(raw))
+  memset(&parsed, 0, sizeof(parsed));
+
+  if (!CheckStructure(raw, length))
   {
     ++protocol->stats.format_errors;
-    return XBOX_POLL_ERROR;
+    return Reject(protocol, XBOX_REJECT_FORMAT);
+  }
+
+  if (is_v2)
+  {
+    crc_first = XBOX_V2_CRC_FIRST;
+    crc_last = XBOX_V2_CRC_LAST;
+    crc_offset = XBOX_V2_CRC_OFFSET;
+    seq_offset = XBOX_V2_SEQ_OFFSET;
+  }
+  else
+  {
+    crc_first = XBOX_V1_CRC_FIRST;
+    crc_last = XBOX_V1_CRC_LAST;
+    crc_offset = XBOX_V1_CRC_OFFSET;
+    seq_offset = XBOX_V1_SEQ_OFFSET;
   }
 
   /* CRC before field parsing: a corrupt frame should not be interpreted. */
-  if (!ParseHexByte(&raw[XBOX_FRAME_CRC_OFFSET], &received_crc))
+  if (!ParseHexByte(&raw[crc_offset], &received_crc))
   {
     ++protocol->stats.format_errors;
-    return XBOX_POLL_ERROR;
+    return Reject(protocol, XBOX_REJECT_FORMAT);
   }
 
-  calculated_crc = XboxProtocol_Crc(&raw[XBOX_FRAME_CRC_FIRST],
-                                    XBOX_FRAME_CRC_LAST - XBOX_FRAME_CRC_FIRST + 1U);
+  calculated_crc =
+      XboxProtocol_Crc(&raw[crc_first], (uint16_t)(crc_last - crc_first + 1U));
   if (received_crc != calculated_crc)
   {
     ++protocol->stats.crc_errors;
-    return XBOX_POLL_ERROR;
+    return Reject(protocol, XBOX_REJECT_CRC);
   }
 
-  if (!ParseCommand(&raw[XBOX_FRAME_CMD_OFFSET], &parsed.command))
+  if (!ParseCommand(&raw[XBOX_V1_CMD_OFFSET], &parsed.command))
   {
     ++protocol->stats.format_errors;
-    return XBOX_POLL_ERROR;
+    return Reject(protocol, XBOX_REJECT_FORMAT);
   }
 
   if (!CommandIsKnown(parsed.command))
   {
     ++protocol->stats.range_errors;
-    return XBOX_POLL_ERROR;
+    return Reject(protocol, XBOX_REJECT_UNKNOWN_COMMAND);
   }
 
-  if (!ParseSigned5(&raw[XBOX_FRAME_LEFT_OFFSET], &parsed.left) ||
-      !ParseSigned5(&raw[XBOX_FRAME_RIGHT_OFFSET], &parsed.right))
+  /*
+   * The mixed pair sits at the same offsets in both versions, which is what
+   * lets one emitter upgrade without moving the fields the vehicle drives on.
+   */
+  if (!ParseSigned5(&raw[XBOX_V1_LEFT_OFFSET], &parsed.left,
+                    (int16_t)MOTOR_SPEED_MAX) ||
+      !ParseSigned5(&raw[XBOX_V1_RIGHT_OFFSET], &parsed.right,
+                    (int16_t)MOTOR_SPEED_MAX))
   {
     /*
      * Either the field is not a signed decimal or the magnitude exceeds the
      * agreed limit. Both are refusals to drive on untrusted numbers.
      */
     ++protocol->stats.range_errors;
-    return XBOX_POLL_ERROR;
+    return Reject(protocol, XBOX_REJECT_RANGE);
   }
 
-  if (!ParseUnsigned4(&raw[XBOX_FRAME_SEQ_OFFSET], &sequence))
+  if (is_v2)
+  {
+    if (!ParseSigned5(&raw[XBOX_V2_UD_OFFSET], &parsed.up_down,
+                      (int16_t)MOTOR_SPEED_MAX) ||
+        !ParseSigned5(&raw[XBOX_V2_LR_OFFSET], &parsed.left_right,
+                      (int16_t)MOTOR_SPEED_MAX) ||
+        !ParseSigned5(&raw[XBOX_V2_RAW_UD_OFFSET], &parsed.raw_up_down,
+                      (int16_t)XBOX_RAW_AXIS_MAX) ||
+        !ParseSigned5(&raw[XBOX_V2_RAW_LR_OFFSET], &parsed.raw_left_right,
+                      (int16_t)XBOX_RAW_AXIS_MAX))
+    {
+      ++protocol->stats.range_errors;
+      return Reject(protocol, XBOX_REJECT_RANGE);
+    }
+
+    if (!ParseHexByte(&raw[XBOX_V2_FLAGS_OFFSET], &parsed.flags))
+    {
+      ++protocol->stats.format_errors;
+      return Reject(protocol, XBOX_REJECT_FORMAT);
+    }
+
+    parsed.version = 2U;
+  }
+  else
+  {
+    /*
+     * v1 carries no dimensions of its own. Recover them with the same
+     * decomposition the safety limiter uses, so a v1 emitter still produces a
+     * sensible display and log instead of two blank axes.
+     */
+    parsed.up_down = (int16_t)(((int32_t)parsed.left + (int32_t)parsed.right) / 2);
+    parsed.left_right =
+        (int16_t)(((int32_t)parsed.left - (int32_t)parsed.right) / 2);
+    parsed.raw_up_down = 0;
+    parsed.raw_left_right = 0;
+    parsed.flags = (parsed.command != (uint8_t)XBOX_CMD_DISCONNECTED)
+                       ? (uint8_t)(XBOX_FLAG_CONNECTED | XBOX_FLAG_HAS_SAMPLE)
+                       : 0U;
+    parsed.version = 1U;
+  }
+
+  if (!ParseUnsigned4(&raw[seq_offset], &sequence))
   {
     ++protocol->stats.format_errors;
-    return XBOX_POLL_ERROR;
+    return Reject(protocol, XBOX_REJECT_FORMAT);
   }
 
   sequence_result = ClassifySequence(protocol, sequence);
@@ -385,9 +497,18 @@ static XboxPollResult ValidateFrame(XboxProtocol *protocol,
   }
 
   parsed.sequence = sequence;
-  parsed.connected = (parsed.command != (uint8_t)XBOX_CMD_DISCONNECTED);
+
+  /*
+   * Two independent statements of presence must agree. A frame that claims a
+   * connected controller while carrying the Disconnected action code is not
+   * trusted to drive, so the pessimistic reading wins.
+   */
+  parsed.connected = ((parsed.flags & XBOX_FLAG_CONNECTED) != 0U) &&
+                     (parsed.command != (uint8_t)XBOX_CMD_DISCONNECTED);
+  parsed.has_sample = ((parsed.flags & XBOX_FLAG_HAS_SAMPLE) != 0U);
   parsed.emergency = (parsed.command == (uint8_t)XBOX_CMD_EMERGENCY_STOP ||
-                      parsed.command == (uint8_t)XBOX_CMD_ERROR);
+                      parsed.command == (uint8_t)XBOX_CMD_ERROR ||
+                      (parsed.flags & XBOX_FLAG_CONTROL_ERROR) != 0U);
 
   /*
    * These commands are defined to carry zeros. Forcing them here means a
@@ -398,14 +519,26 @@ static XboxPollResult ValidateFrame(XboxProtocol *protocol,
                         parsed.command == (uint8_t)XBOX_CMD_EMERGENCY_STOP ||
                         parsed.command == (uint8_t)XBOX_CMD_NO_INPUT ||
                         parsed.command == (uint8_t)XBOX_CMD_DISCONNECTED ||
-                        parsed.command == (uint8_t)XBOX_CMD_ERROR);
+                        parsed.command == (uint8_t)XBOX_CMD_ERROR ||
+                        !parsed.connected);
   if (parsed.forces_zero)
   {
     parsed.left = 0;
     parsed.right = 0;
+    parsed.up_down = 0;
+    parsed.left_right = 0;
   }
 
   ++protocol->stats.valid_frames;
+  if (is_v2)
+  {
+    ++protocol->stats.v2_frames;
+  }
+  else
+  {
+    ++protocol->stats.v1_frames;
+  }
+  protocol->last_reject_reason = (uint8_t)XBOX_REJECT_NONE;
 
   if (frame != NULL)
   {
@@ -436,13 +569,14 @@ XboxPollResult XboxProtocol_Poll(XboxProtocol *protocol, XboxControlFrame *frame
 
       protocol->frame[0] = byte;
       protocol->frame_length = 1U;
+      protocol->expected_length = 0U;
       protocol->in_frame = true;
 
       if (abandoned)
       {
         /* A frame was in progress and never completed. */
         ++protocol->stats.format_errors;
-        return XBOX_POLL_ERROR;
+        return Reject(protocol, XBOX_REJECT_FORMAT);
       }
       continue;
     }
@@ -453,16 +587,55 @@ XboxPollResult XboxProtocol_Poll(XboxProtocol *protocol, XboxControlFrame *frame
       continue;
     }
 
+    /*
+     * Bound the write before it happens. The length decision below guarantees
+     * this never trips, but the buffer index is derived from stream data and a
+     * guard that costs one comparison is cheaper than trusting that argument.
+     */
+    if (protocol->frame_length >= XBOX_FRAME_MAX_LENGTH)
+    {
+      protocol->in_frame = false;
+      protocol->frame_length = 0U;
+      protocol->expected_length = 0U;
+      ++protocol->stats.format_errors;
+      return Reject(protocol, XBOX_REJECT_FORMAT);
+    }
+
     protocol->frame[protocol->frame_length] = byte;
     ++protocol->frame_length;
 
-    if (protocol->frame_length >= XBOX_FRAME_LENGTH)
+    /*
+     * The third byte names the format and therefore the length. Deciding here
+     * rather than at completion is what allows two frame sizes to share one
+     * streaming assembler: until this point every format looks identical.
+     */
+    if (protocol->frame_length == 3U)
+    {
+      protocol->expected_length = FrameLengthForFormat(protocol->frame[2]);
+      if (protocol->frame[1] != (uint8_t)'X' || protocol->expected_length == 0U)
+      {
+        /*
+         * Not a frame header this build understands. Abandon assembly and wait
+         * for the next '$' rather than consuming bytes into a length we guessed.
+         */
+        protocol->in_frame = false;
+        protocol->frame_length = 0U;
+        protocol->expected_length = 0U;
+        ++protocol->stats.format_errors;
+        return Reject(protocol, XBOX_REJECT_FORMAT);
+      }
+      continue;
+    }
+
+    if (protocol->expected_length != 0U &&
+        protocol->frame_length >= protocol->expected_length)
     {
       XboxPollResult result;
 
       protocol->in_frame = false;
       protocol->frame_length = 0U;
       result = ValidateFrame(protocol, frame);
+      protocol->expected_length = 0U;
       return result;
     }
   }
@@ -501,4 +674,33 @@ void XboxProtocol_GetStats(const XboxProtocol *protocol, XboxProtocolStats *stat
    */
   stats->rx_bytes = protocol->isr_rx_bytes;
   stats->rx_overflows = protocol->isr_overflows;
+}
+
+uint8_t XboxProtocol_GetLastRejectReason(const XboxProtocol *protocol)
+{
+  if (protocol == NULL)
+  {
+    return (uint8_t)XBOX_REJECT_NONE;
+  }
+  return protocol->last_reject_reason;
+}
+
+const char *XboxProtocol_RejectReasonName(uint8_t reason)
+{
+  switch (reason)
+  {
+    case XBOX_REJECT_FORMAT:
+      return "FORMAT_ERROR";
+    case XBOX_REJECT_CRC:
+      return "CRC_ERROR";
+    case XBOX_REJECT_RANGE:
+      return "RANGE_ERROR";
+    case XBOX_REJECT_SEQUENCE:
+      return "SEQUENCE_ERROR";
+    case XBOX_REJECT_UNKNOWN_COMMAND:
+      return "UNKNOWN_COMMAND";
+    case XBOX_REJECT_NONE:
+    default:
+      return "NONE";
+  }
 }
