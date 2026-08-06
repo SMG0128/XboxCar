@@ -173,7 +173,7 @@ static void MX_I2C1_Init(void)
 }
 
 /**
- * @brief USART1 Initialization Function
+  * @brief USART1 Initialization Function
   * @param None
   * @retval None
   */

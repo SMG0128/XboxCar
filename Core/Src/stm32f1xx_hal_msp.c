@@ -116,8 +116,9 @@ void HAL_UART_MspInit(UART_HandleTypeDef *uart_handle)
   {
     __HAL_RCC_GPIOB_CLK_ENABLE();
     __HAL_RCC_AFIO_CLK_ENABLE();
-    __HAL_RCC_USART1_CLK_ENABLE();
+    /* USART1 remap: TX->PB6, RX->PB7 (default PA9/PA10 are motor pins). */
     __HAL_AFIO_REMAP_USART1_ENABLE();
+    __HAL_RCC_USART1_CLK_ENABLE();
 
     GPIO_InitStruct.Pin = STM32_TX_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
